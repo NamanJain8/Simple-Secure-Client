@@ -281,7 +281,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// now we have 'key' for storing data and 'symmetric_key' for AES encryption
 	// Time to get hash(addressKey2,data) append addressKey2 + data and find SHA
 
-	dataString := hex.EncodeToString(data)
+	dataString := string(data)
 	AddressContent := addresskey2 + dataString // element pf hash_locations []
 	AddressContentHash := toSHAString(AddressContent)
 
@@ -369,7 +369,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	userlib.DebugMsg("Reached")
 	// Now the File data has been verified to be untampered, iterate over all locations
 	var content = ""
-	for _, element := range file.Locations {
+	for index, element := range file.Locations {
 		databytes, datavalid := userlib.DatastoreGet(element)
 		if !datavalid {
 			err := errors.New("[LoadFile] DataStore corrupted or File not found")
@@ -392,8 +392,15 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 			return nil, err
 		}
 
-		// now this content has been verified, convert to string and append
 		dataString := string(filedata.Data)
+		AddressContent := element + dataString // element pf hash_locations []
+		AddressContentHash := toSHAString(AddressContent)
+
+		if userlib.Equal([]byte(AddressContentHash), []byte(file.Hash_locations[index])) != true {
+			err := errors.New("[LoadFile] File tampered")
+			return nil, err
+		}
+		// now this content has been verified, convert to string and append
 		content += dataString
 	}
 	data = ([]byte(content))
