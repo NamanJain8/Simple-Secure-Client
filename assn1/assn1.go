@@ -7,6 +7,7 @@ import (
 
 	// You neet to add with
 	// go get github.com/fenilfadadu/CS628-assn1/userlib
+
 	"github.com/fenilfadadu/CS628-assn1/userlib"
 
 	// Life is much easier with json:  You are
@@ -63,7 +64,6 @@ func someUsefulThings() {
 	userlib.DebugMsg("Key is %v", key)
 }
 
-
 // func structToBytes(){
 
 // }
@@ -79,30 +79,47 @@ func bytesToUUID(data []byte) (ret uuid.UUID) {
 
 var aesBlockSize = userlib.BlockSize
 
-
 // The structure definition for a user record
 type User struct {
 	// All fields must be capital for JSON marshal to work
-	Username string 	// Username
-	Argon_pass []byte	// Argon password
-	RSAkey userlib.PrivateKey // Public Private pair for user RSA
-	Filemap map[string]string // Map for filename -> location
-	Filekey map[string]string // Hex string for filekey
-	SHA string 	// hex string for SHA of above data (see GenerateUserHash)
+	Username   string             // Username
+	Argon_pass []byte             // Argon password
+	RSAkey     userlib.PrivateKey // Public Private pair for user RSA
+	Filemap    map[string]string  // Map for filename -> location
+	Filekey    map[string]string  // Hex string for filekey
+	SHA        string             // hex string for SHA of above data (see GenerateUserHash)
+}
+type File struct {
+	Symmetric_key  []byte   // Symmetric key (also IV) for encrypting the corresponding contents
+	locations      []string // locations at which these segments of file would be stored
+	hash_locations []string // hash of location_data for integrity check
+	SHA            string   // hex string for SHA of above data
+}
+type File_data struct {
+	data []byte
+	SHA  string
 }
 
+func toFileHash(filedata File) string {
+	var filereq File
+	filereq.Symmetric_key = filedata.Symmetric_key
+	filereq.locations = filedata.locations
+	filereq.hash_locations = filedata.hash_locations
+	bytes, _ := json.Marshal(filereq)
+	hash := userlib.NewSHA256()
+	hash.Write([]byte(bytes))
+	sha := hex.EncodeToString(hash.Sum(nil))
+	return sha
+}
 
-// 
-func toUserHash(userdata User) string{
+func toUserHash(userdata User) string {
 	var userreq User
 	userreq.Username = userdata.Username
 	userreq.Argon_pass = userdata.Argon_pass
 	userreq.RSAkey = userdata.RSAkey
 	userreq.Filemap = userdata.Filemap
 	userreq.Filekey = userdata.Filekey
-    bytes,_ := json.Marshal(userreq)
-
-    
+	bytes, _ := json.Marshal(userreq)
 	hash := userlib.NewSHA256()
 	hash.Write([]byte(bytes))
 	sha := hex.EncodeToString(hash.Sum(nil))
@@ -110,7 +127,7 @@ func toUserHash(userdata User) string{
 }
 
 // Generates SHA Hash of string
-func toSHAString(key string)string{
+func toSHAString(key string) string {
 	hash := userlib.NewSHA256()
 	hash.Write([]byte(key))
 	hashedkey := hex.EncodeToString(hash.Sum(nil))
@@ -118,7 +135,7 @@ func toSHAString(key string)string{
 }
 
 // Takes password and salt, return 16 byte argon2hash
-func toArgon2Hash(password string, salt string)[]byte{
+func toArgon2Hash(password string, salt string) []byte {
 	return userlib.Argon2Key([]byte(password), []byte(salt), 16)
 }
 
@@ -156,26 +173,26 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.Filekey = make(map[string]string)
 	userdata.SHA = toUserHash(userdata)
 
-	// Insert into DataStore with encryption	
+	// Insert into DataStore with encryption
 	s := toSHAString(username)
-	bytes,_ := json.Marshal(userdata) 
+	bytes, _ := json.Marshal(userdata)
 
 	ciphertext := make([]byte, aesBlockSize+len(bytes))
 	iv := ciphertext[:aesBlockSize]
 	copy(iv, argon_pass[:aesBlockSize])
-	cipher := userlib.CFBEncrypter(argon_pass, iv) 
+	cipher := userlib.CFBEncrypter(argon_pass, iv)
 	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
 
 	userlib.DatastoreSet(s, ciphertext)
-	
+
 	// Ensure if inserted or not
 	_, valid := userlib.DatastoreGet(s)
 
 	// Check initialisation
 	if !valid {
 		err := errors.New("[InitUser] User initialization failed")
-		return nil,err
-	}	else {
+		return nil, err
+	} else {
 		return &userdata, err
 	}
 }
@@ -191,11 +208,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	// Return error if user not found
 	if !valid {
 		err := errors.New("[GetUser] DataStore corrupted or user not found")
-		return nil,err
-	} 
-	
+		return nil, err
+	}
+
 	// Decrypt using Argon2 of Password as key
-	argon_pass := toArgon2Hash(password,username)
+	argon_pass := toArgon2Hash(password, username)
 	ciphertext := make([]byte, len(bytes))
 	iv := make([]byte, aesBlockSize)
 	copy(iv, argon_pass[:aesBlockSize])
@@ -208,18 +225,91 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	// Compare hash and throw error if not matched
 	newhash := toUserHash(userdata)
-	if userlib.Equal([]byte(newhash), []byte(userdata.SHA)) != true{
+	if userlib.Equal([]byte(newhash), []byte(userdata.SHA)) != true {
 		err := errors.New("[GetUser] Userdata tampered")
 		return nil, err
 	}
 
-	return &userdata,nil
+	return &userdata, nil
+}
+func storeFiledata(data []byte, aeskey []byte, addressKey string) {
+	hash := userlib.NewSHA256()
+	hash.Write([]byte(data))
+	sha := hex.EncodeToString(hash.Sum(nil)) // this is the SHA of data
+	var filedata File_data
+	filedata.data = data
+	filedata.SHA = sha
+
+	// Now we need to encrypt it
+
+	bytes, _ := json.Marshal(filedata)
+	ciphertext := make([]byte, aesBlockSize+len(bytes))
+	iv := ciphertext[:aesBlockSize]
+	copy(iv, aeskey[:aesBlockSize])
+	cipher := userlib.CFBEncrypter(aeskey, iv)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
+
+	// Now set it to the datastore
+
+	userlib.DatastoreSet(addressKey, ciphertext)
+	return
 }
 
 // This stores a file in the datastore.
 //
 // The name of the file should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
+	// generate all required contents first : IV(K_sym),'key' where to store this struct
+	Ksym := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
+	aeskey := userlib.RandomBytes(aesBlockSize)
+	var effective_filename = userdata.Username + "_" + filename
+	var effective_filename2 = effective_filename + "_" + string(0)
+	addresskey := toSHAString(effective_filename)
+	addresskey2 := toSHAString(effective_filename2)
+	// here first file data would be stored
+	// addresskey2 would be stored in locations []
+	// store the file content where it is supposed to be
+
+	storeFiledata(data, aeskey, addresskey2)
+
+	// now we have 'key' for storing data and 'symmetric_key' for AES encryption
+	// Time to get hash(addressKey2,data) append addressKey2 + data and find SHA
+
+	dataString := hex.EncodeToString(data)
+	AddressContent := addresskey2 + dataString // element pf hash_locations []
+	AddressContentHash := toSHAString(AddressContent)
+
+	// now set all the fileds in the structure
+
+	var filedata File
+	filedata.Symmetric_key = aeskey
+	filedata.locations = make([]string, 0)
+	filedata.locations = append([]string(nil), addresskey2)
+	filedata.hash_locations = make([]string, 0)
+	filedata.hash_locations = append([]string(nil), AddressContentHash)
+	filedata.SHA = toFileHash(filedata)
+
+	// Now we need to set map in user struct
+
+	userdata.Filemap[filename] = addresskey
+	KsymString := hex.EncodeToString(Ksym)
+	userdata.Filekey[filename] = KsymString
+
+	// remodify the userdata hash ===== importtant
+
+	userdata.SHA = toUserHash(*userdata)
+
+	// now encrypt it using Ksym
+	bytes4, _ := json.Marshal(filedata)
+	ciphertext := make([]byte, aesBlockSize+len(bytes4))
+	iv := ciphertext[:aesBlockSize]
+	copy(iv, Ksym[:aesBlockSize])
+	cipher := userlib.CFBEncrypter(Ksym, iv)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes4)
+
+	// place on the data store
+	userlib.DatastoreSet(addresskey, ciphertext)
+
 }
 
 // This adds on to an existing file.
