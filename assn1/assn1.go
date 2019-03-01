@@ -139,6 +139,24 @@ func toArgon2Hash(password string, salt string) []byte {
 	return userlib.Argon2Key([]byte(password), []byte(salt), 16)
 }
 
+func AESEncrypt(bytes []byte, key []byte)[]byte{
+	ciphertext := make([]byte, aesBlockSize+len(bytes))
+	iv := ciphertext[:aesBlockSize]
+	copy(iv, key[:aesBlockSize])
+	cipher := userlib.CFBEncrypter(key, iv)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
+	return ciphertext
+}
+
+func AESDecrypt(bytes []byte, key []byte)[]byte{
+	ciphertext := make([]byte, len(bytes))
+	iv := make([]byte, aesBlockSize)
+	copy(iv, key[:aesBlockSize])
+	cipher := userlib.CFBDecrypter(key, iv)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes[aesBlockSize:])
+	return ciphertext[aesBlockSize:]
+}
+
 // This creates a user.  It will only be called once for a user
 // (unless the keystore and datastore are cleared during testing purposes)
 
@@ -176,13 +194,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	// Insert into DataStore with encryption
 	s := toSHAString(username)
 	bytes, _ := json.Marshal(userdata)
-
-	ciphertext := make([]byte, aesBlockSize+len(bytes))
-	iv := ciphertext[:aesBlockSize]
-	copy(iv, argon_pass[:aesBlockSize])
-	cipher := userlib.CFBEncrypter(argon_pass, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
-
+	ciphertext := AESEncrypt(bytes, argon_pass)
 	userlib.DatastoreSet(s, ciphertext)
 
 	// Ensure if inserted or not
@@ -213,15 +225,11 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	// Decrypt using Argon2 of Password as key
 	argon_pass := toArgon2Hash(password, username)
-	ciphertext := make([]byte, len(bytes))
-	iv := make([]byte, aesBlockSize)
-	copy(iv, argon_pass[:aesBlockSize])
-	cipher := userlib.CFBDecrypter(argon_pass, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes[aesBlockSize:])
+	ciphertext := AESDecrypt(bytes, argon_pass)
 
 	// Unmarshal into User structure
 	var userdata User
-	json.Unmarshal(ciphertext[aesBlockSize:], &userdata)
+	json.Unmarshal(ciphertext, &userdata)
 
 	// Compare hash and throw error if not matched
 	newhash := toUserHash(userdata)
@@ -307,11 +315,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	// now encrypt it using Ksym
 	bytes, _ := json.Marshal(filedata)
-	ciphertext := make([]byte, aesBlockSize+len(bytes))
-	iv := ciphertext[:aesBlockSize]
-	copy(iv, Ksym[:aesBlockSize])
-	cipher := userlib.CFBEncrypter(Ksym, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
+	ciphertext := AESEncrypt(bytes, Ksym)
 
 	// place on the data store
 	userlib.DatastoreSet(addresskey, ciphertext)
@@ -349,43 +353,35 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	}
 
 	// Decrypt using Ksym as key
-	ciphertext := make([]byte, len(bytes))
-	iv := make([]byte, aesBlockSize)
-	copy(iv, Ksym[:aesBlockSize])
-	cipher := userlib.CFBDecrypter(Ksym, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes[aesBlockSize:])
+	ciphertext := AESDecrypt(bytes,Ksym)
 	// userlib.DebugMsg("Before Decryuption: %v", bytes)
 	// userlib.DebugMsg("After Decryuption: %v", ciphertext)
 	// userlib.DebugMsg("Aftre IV: %v", iv)
 	// userlib.DebugMsg("Aftre Ksym: %v", Ksym)
 	// Unmarshal into User structure
 	var file File
-	json.Unmarshal(ciphertext[aesBlockSize:], &file)
+	json.Unmarshal(ciphertext, &file)
 	newhash := toFileHash(file)
 	if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
 		err := errors.New("[LoadFile] File tampered2")
 		return nil, err
 	}
-	userlib.DebugMsg("Reached")
+	// userlib.DebugMsg("Reached")
 	// Now the File data has been verified to be untampered, iterate over all locations
 	var content = ""
 	for index, element := range file.Locations {
 		databytes, datavalid := userlib.DatastoreGet(element)
 		if !datavalid {
-			err := errors.New("[LoadFile] DataStore corrupted or File not found")
+			err := errors.New("[LoadFile] DataStore corrupted or filedata not found")
 			return nil, err
 		}
 
 		// Decrypt using Ksym as key
 		aeskey := file.Symmetric_key
-		ciphertext := make([]byte, len(databytes))
-		iv := make([]byte, aesBlockSize)
-		copy(iv, aeskey[:aesBlockSize])
-		cipher := userlib.CFBDecrypter(aeskey, iv)
-		cipher.XORKeyStream(ciphertext[aesBlockSize:], databytes[aesBlockSize:])
+		ciphertext := AESDecrypt(databytes, aeskey)
 
 		var filedata File_data
-		json.Unmarshal(ciphertext[aesBlockSize:], &filedata)
+		json.Unmarshal(ciphertext, &filedata)
 		newhash := toFiledataHash(filedata)
 		if userlib.Equal([]byte(newhash), []byte(filedata.SHA)) != true {
 			err := errors.New("[LoadFile] File tampered")
@@ -410,6 +406,9 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 // You may want to define what you actually want to pass as a
 // sharingRecord to serialized/deserialize in the data store.
 type sharingRecord struct {
+	Addresskey string 		// Key of file in datastore
+	Symmetric_key []byte 	// Symmetric Key of file
+	RSA_Sign []byte 		// RSA_Sign to verify integrity
 }
 
 // This creates a sharing record, which is a key pointing to something
@@ -425,8 +424,44 @@ type sharingRecord struct {
 
 func (userdata *User) ShareFile(filename string, recipient string) (
 	msgid string, err error) {
+
+	userlib.DebugMsg("address: %v", []byte("hello"))
+	var record sharingRecord
+	// Fill up record
+	record.Addresskey = userdata.Filekey[filename]
+	record.Symmetric_key = []byte(userdata.Filekey[filename])
+
+	bytes, err2 := userlib.DatastoreGet(record.Addresskey)
+	userlib.DebugMsg("bytes: %v", string(bytes))
+	if !err2{
+		err := errors.New("[ShareFile] DataStore corrupted")
+		return "hello", err
+	}
+
+	// Sign the message (addresskey + symmetric_key) 
+	// First convert to bytes and then RSAsign
+	msg, _ := json.Marshal(record)
+	sign, _ := userlib.RSASign(&(userdata.RSAkey), msg)
+	record.RSA_Sign = sign
+
+	pub,_ := userlib.KeystoreGet(recipient)
+	signed_msg, _ := json.Marshal(record)
+	// Encrypt the message
+	message, err := userlib.RSAEncrypt(&pub,signed_msg,[]byte("Tag"))
+	msgid = string(message)
+
 	return
 }
+
+
+func recordToMsg(record sharingRecord) []byte{
+	var recordreq sharingRecord
+	recordreq.Addresskey = record.Addresskey
+	recordreq.Symmetric_key = record.Symmetric_key
+	bytes, _ := json.Marshal(recordreq)
+	return bytes
+}
+
 
 // Note recipient's filename can be different from the sender's filename.
 // The recipient should not be able to discover the sender's view on
@@ -434,6 +469,45 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 // it is authentically from the sender.
 func (userdata *User) ReceiveFile(filename string, sender string,
 	msgid string) error {
+	// Decrypt the message
+	decrypted_msg,_ := userlib.RSADecrypt(&(userdata.RSAkey), []byte(msgid), []byte("Tag"))
+
+	var record sharingRecord
+	json.Unmarshal(decrypted_msg, &record)
+
+	// Check RSA Sign
+	sign := record.RSA_Sign
+	msg := recordToMsg(record)
+	pub,_ := userlib.KeystoreGet(sender)
+	err := userlib.RSAVerify(&pub,msg,sign)
+
+	if err!=nil {
+		err := errors.New("[ReceiveFile] Message tampered")
+		return err
+	}
+	userlib.DebugMsg("ReceiveFile record: %v", record)
+	// Integrity preserved if control reaches here
+	// Now we need to set map in user struct
+
+	effective_filename := userdata.Username + "_" + filename
+	addresskey := toSHAString(effective_filename)
+	userdata.Filemap[filename] = addresskey
+	KsymString := string(record.Symmetric_key)
+	userdata.Filekey[filename] = KsymString
+
+	// remodify the userdata hash ===== importtant
+
+	userdata.SHA = toUserHash(*userdata)
+
+	// var receiverFile *File
+
+	_, ok := userlib.DatastoreGet(record.Addresskey) 
+	if !ok{
+		err := errors.New("[ReceiveFile] Datastore corrupted or file not found")
+		return err
+	}
+
+
 	return nil
 }
 

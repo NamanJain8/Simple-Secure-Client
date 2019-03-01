@@ -51,9 +51,28 @@ func TestStorage(t *testing.T) {
 	if err2 != nil {
 		t.Error("Failed to upload and download", err2)
 	}
+
+	t.Log("file1: " , v)
+	t.Log("file2: " , v2)
 	if !reflect.DeepEqual(v, v2) {
 		t.Error("Downloaded file is not the same", v, v2)
 	}
+
+
+	// v3 := []byte("This is a testyyyy")
+	// u.StoreFile("file22", v3)
+	// v2, err2 = u.LoadFile("file1")
+	// if err2 != nil {
+	// 	t.Error("Failed to upload and download", err2)
+	// }
+
+
+	// t.Log("file1: " , v)
+	// t.Log("file2: " , v2)
+	// if !reflect.DeepEqual(v, v2) {
+	// 	t.Error("Downloaded file is not the same", v, v2)
+	// }
+
 }
 
 func TestShare(t *testing.T) {
@@ -61,10 +80,17 @@ func TestShare(t *testing.T) {
 	if err != nil {
 		t.Error("Failed to reload user", err)
 	}
+
 	u2, err2 := InitUser("bob", "foobar")
 	if err2 != nil {
 		t.Error("Failed to initialize bob", err2)
 	}
+
+	//
+	v5 := []byte("This is a test")
+	u.StoreFile("file1", v5)
+	
+	//
 
 	var v, v2 []byte
 	var msgid string
