@@ -91,20 +91,20 @@ type User struct {
 }
 type File struct {
 	Symmetric_key  []byte   // Symmetric key (also IV) for encrypting the corresponding contents
-	locations      []string // locations at which these segments of file would be stored
-	hash_locations []string // hash of location_data for integrity check
+	Locations      []string // locations at which these segments of file would be stored
+	Hash_locations []string // hash of location_data for integrity check
 	SHA            string   // hex string for SHA of above data
 }
 type File_data struct {
-	data []byte
+	Data []byte
 	SHA  string
 }
 
 func toFileHash(filedata File) string {
 	var filereq File
 	filereq.Symmetric_key = filedata.Symmetric_key
-	filereq.locations = filedata.locations
-	filereq.hash_locations = filedata.hash_locations
+	filereq.Locations = filedata.Locations
+	filereq.Hash_locations = filedata.Hash_locations
 	bytes, _ := json.Marshal(filereq)
 	hash := userlib.NewSHA256()
 	hash.Write([]byte(bytes))
@@ -232,13 +232,18 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	return &userdata, nil
 }
-func storeFiledata(data []byte, aeskey []byte, addressKey string) {
+func toFiledataHash(filedata File_data) string {
 	hash := userlib.NewSHA256()
-	hash.Write([]byte(data))
+	hash.Write([]byte(filedata.Data))
 	sha := hex.EncodeToString(hash.Sum(nil)) // this is the SHA of data
+	return sha
+}
+
+func storeFiledata(data []byte, aeskey []byte, addressKey string) {
+
 	var filedata File_data
-	filedata.data = data
-	filedata.SHA = sha
+	filedata.Data = data
+	filedata.SHA = toFiledataHash(filedata)
 
 	// Now we need to encrypt it
 
@@ -262,6 +267,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// generate all required contents first : IV(K_sym),'key' where to store this struct
 	Ksym := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
 	aeskey := userlib.RandomBytes(aesBlockSize)
+
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
 	addresskey := toSHAString(effective_filename)
@@ -283,16 +289,16 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	var filedata File
 	filedata.Symmetric_key = aeskey
-	filedata.locations = make([]string, 0)
-	filedata.locations = append([]string(nil), addresskey2)
-	filedata.hash_locations = make([]string, 0)
-	filedata.hash_locations = append([]string(nil), AddressContentHash)
+	filedata.Locations = make([]string, 0)
+	filedata.Locations = append([]string(filedata.Locations), addresskey2)
+	filedata.Hash_locations = make([]string, 0)
+	filedata.Hash_locations = append([]string(filedata.Hash_locations), AddressContentHash)
 	filedata.SHA = toFileHash(filedata)
 
 	// Now we need to set map in user struct
 
 	userdata.Filemap[filename] = addresskey
-	KsymString := hex.EncodeToString(Ksym)
+	KsymString := string(Ksym)
 	userdata.Filekey[filename] = KsymString
 
 	// remodify the userdata hash ===== importtant
@@ -300,16 +306,19 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	userdata.SHA = toUserHash(*userdata)
 
 	// now encrypt it using Ksym
-	bytes4, _ := json.Marshal(filedata)
-	ciphertext := make([]byte, aesBlockSize+len(bytes4))
+	bytes, _ := json.Marshal(filedata)
+	ciphertext := make([]byte, aesBlockSize+len(bytes))
 	iv := ciphertext[:aesBlockSize]
 	copy(iv, Ksym[:aesBlockSize])
 	cipher := userlib.CFBEncrypter(Ksym, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes4)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
 
 	// place on the data store
 	userlib.DatastoreSet(addresskey, ciphertext)
-
+	// userlib.DebugMsg("Before Encryption: %v", bytes)
+	// userlib.DebugMsg("After Encryption: %v", ciphertext)
+	// userlib.DebugMsg("Aftre IV: %v", iv)
+	// userlib.DebugMsg("Aftre Ksym: %v", Ksym)
 }
 
 // This adds on to an existing file.
@@ -326,7 +335,69 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
-	return
+	// get address of the corresponding File struct
+	addresskey := userdata.Filemap[filename] // get string of the address
+	KsymString := userdata.Filekey[filename] // get Symmetric Key for decryption
+	Ksym := ([]byte(KsymString))
+	bytes, valid := userlib.DatastoreGet(addresskey)
+	// userlib.DebugMsg("addr key: %v", bytes)
+	// Return error if File not found
+
+	if !valid {
+		err := errors.New("[LoadFile] DataStore corrupted or File not found")
+		return nil, err
+	}
+
+	// Decrypt using Ksym as key
+	ciphertext := make([]byte, len(bytes))
+	iv := make([]byte, aesBlockSize)
+	copy(iv, Ksym[:aesBlockSize])
+	cipher := userlib.CFBDecrypter(Ksym, iv)
+	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes[aesBlockSize:])
+	// userlib.DebugMsg("Before Decryuption: %v", bytes)
+	// userlib.DebugMsg("After Decryuption: %v", ciphertext)
+	// userlib.DebugMsg("Aftre IV: %v", iv)
+	// userlib.DebugMsg("Aftre Ksym: %v", Ksym)
+	// Unmarshal into User structure
+	var file File
+	json.Unmarshal(ciphertext[aesBlockSize:], &file)
+	newhash := toFileHash(file)
+	if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
+		err := errors.New("[LoadFile] File tampered2")
+		return nil, err
+	}
+	userlib.DebugMsg("Reached")
+	// Now the File data has been verified to be untampered, iterate over all locations
+	var content = ""
+	for _, element := range file.Locations {
+		databytes, datavalid := userlib.DatastoreGet(element)
+		if !datavalid {
+			err := errors.New("[LoadFile] DataStore corrupted or File not found")
+			return nil, err
+		}
+
+		// Decrypt using Ksym as key
+		aeskey := file.Symmetric_key
+		ciphertext := make([]byte, len(databytes))
+		iv := make([]byte, aesBlockSize)
+		copy(iv, aeskey[:aesBlockSize])
+		cipher := userlib.CFBDecrypter(aeskey, iv)
+		cipher.XORKeyStream(ciphertext[aesBlockSize:], databytes[aesBlockSize:])
+
+		var filedata File_data
+		json.Unmarshal(ciphertext[aesBlockSize:], &filedata)
+		newhash := toFiledataHash(filedata)
+		if userlib.Equal([]byte(newhash), []byte(filedata.SHA)) != true {
+			err := errors.New("[LoadFile] File tampered")
+			return nil, err
+		}
+
+		// now this content has been verified, convert to string and append
+		dataString := string(filedata.Data)
+		content += dataString
+	}
+	data = ([]byte(content))
+	return data, err
 }
 
 // You may want to define what you actually want to pass as a
