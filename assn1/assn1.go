@@ -256,11 +256,7 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string) {
 	// Now we need to encrypt it
 
 	bytes, _ := json.Marshal(filedata)
-	ciphertext := make([]byte, aesBlockSize+len(bytes))
-	iv := ciphertext[:aesBlockSize]
-	copy(iv, aeskey[:aesBlockSize])
-	cipher := userlib.CFBEncrypter(aeskey, iv)
-	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
+	ciphertext := AESEncrypt(bytes, aeskey)
 
 	// Now set it to the datastore
 
