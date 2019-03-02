@@ -121,6 +121,7 @@ func TestShare(t *testing.T) {
 	}
 
 }
+
 func TestAppend(t *testing.T) {
 	userlib.DebugPrint = true
 	u, err := GetUser("alice", "fubar")
@@ -133,4 +134,32 @@ func TestAppend(t *testing.T) {
 	err = u.AppendFile("file1", v)
 	v2, err := u.LoadFile("file1")
 	t.Log(" Content : ", string(v2))
+}
+
+func TestRevoke(t *testing.T){
+	userlib.DebugPrint = true
+
+	u, err := GetUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to reload user", err)
+	}
+
+	err = u.RevokeFile("file1")
+	if err!=nil {
+		t.Log("Error in revoke")
+	}
+
+	u2, err2 := GetUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to reload user", err)
+	}
+
+	_, err3 := u2.LoadFile("file2")
+	if err3 == nil {
+		t.Error("Not revoked", err)
+	}
+	// if !reflect.DeepEqual(v, v2) {
+	// 	t.Error("Shared file is not the same", v, v2)
+	// }
+
 }

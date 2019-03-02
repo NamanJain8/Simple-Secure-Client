@@ -476,7 +476,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	userlib.DebugMsg("bytes: %x", string(bytes))
 	if !err2 {
 		err := errors.New("[ShareFile] DataStore corrupted")
-		return "hello", err
+		return "Hello", err
 	}
 
 	// Sign the message (addresskey + symmetric_key)
@@ -592,5 +592,45 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 
 // Removes access for all others.
 func (userdata *User) RevokeFile(filename string) (err error) {
+	// Generate new symmetric key and get file
+	Ksym := userdata.Filekey[filename]
+	Ksymnew := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
+	userdata.Filekey[filename] = Ksymnew
+	file_addr := userdata.Filemap[filename]
+	bytes, valid := userlib.DatastoreGet(file_addr)
+	if !valid {
+		err := errors.New("[ShareFile] DataStore corrupted")
+		return err
+	}
+
+	// Decrypt using Ksym as key
+
+	ciphertext := AESDecrypt(bytes, Ksym)
+	var file File
+	json.Unmarshal(ciphertext, &file)
+	newhash := toFileHash(file)
+	if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
+		err := errors.New("[LoadFile] File tampered")
+		return err
+	}
+
+	// Change symmetic key to new symmetric key
+	file.Symmetric_key = Ksymnew
+	file.SHA = toFileHash(file)
+
+	filebytes, _ := json.Marshal(file)
+	fileciphertext := AESEncrypt(filebytes, Ksymnew)
+	userlib.DatastoreSet(file_addr,fileciphertext)
+
+	// remodify the userdata hash ===== importtant
+	userdata.SHA = toUserHash(*userdata)
+
+	// re-enter the user struct in data store because has has been changed
+
+	s := toSHAString(userdata.Username)
+	userbytes, _ := json.Marshal(userdata)
+	userciphertext := AESEncrypt(userbytes, userdata.Argon_pass)
+	userlib.DatastoreSet(s, userciphertext)
+
 	return
 }
