@@ -466,14 +466,14 @@ type sharingRecord struct {
 func (userdata *User) ShareFile(filename string, recipient string) (
 	msgid string, err error) {
 
-	userlib.DebugMsg("address: %v", []byte("hello"))
+	userlib.DebugMsg("address: %x", []byte("hello"))
 	var record sharingRecord
 	// Fill up record
 	record.Addresskey = userdata.Filemap[filename]
 	record.Symmetric_key = userdata.Filekey[filename]
 
 	bytes, err2 := userlib.DatastoreGet(record.Addresskey)
-	userlib.DebugMsg("bytes: %v", string(bytes))
+	userlib.DebugMsg("bytes: %x", string(bytes))
 	if !err2 {
 		err := errors.New("[ShareFile] DataStore corrupted")
 		return "hello", err
@@ -485,12 +485,48 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	sign, _ := userlib.RSASign(&(userdata.RSAkey), msg)
 	record.RSA_Sign = sign
 
-	// pub, _ := userlib.KeystoreGet(recipient)
+	// pub, _ := userlib.KeystoreGet(recipient) // change this to original
+	pub, _ := userlib.KeystoreGet(userdata.Username)
+
 	signed_msg, _ := json.Marshal(record)
 	// Encrypt the message
-	userlib.DebugMsg("Length : %v", len(signed_msg))
+	// userlib.DebugMsg("Length : %v", len(record.Symmetric_key))
+	encryptedmessage := make([]byte, 0)
+	for i := 0; i < len(signed_msg); i += 128 {
+		prev := i
+		last := (i + 128)
+		if last > len(signed_msg) {
+			last = len(signed_msg)
+		}
+		message, _ := userlib.RSAEncrypt(&pub, signed_msg[prev:last], []byte(nil))
+		encryptedmessage = append(encryptedmessage, message...)
+	}
+
+	decryptedmessage := make([]byte, 0)
+
+	for i := 0; i < len(encryptedmessage); i += 128 {
+		prev := i
+		last := (i + 128)
+		if last > len(encryptedmessage) {
+			last = len(encryptedmessage)
+		}
+		decryptedbytes, err3 := userlib.RSADecrypt(&(userdata.RSAkey), []byte(encryptedmessage[prev:last]), []byte(nil))
+		if err3 != nil {
+			userlib.DebugMsg("wow : %s", err3)
+		}
+		decryptedmessage = append(decryptedmessage, decryptedbytes...)
+	}
+	// def := "this"
+	// t1, _ := userlib.RSAEncrypt(&pub, []byte(def), []byte(nil))
+	// t2, _ := userlib.RSADecrypt(&(userdata.RSAkey), t1, []byte(nil))
+	// t3 := string(t2)
+
+	// decryptedmessagebytes := []byte(decryptedmessagestring)
+
+	// filedata.Locations = append([]string(filedata.Locations), addresskey2)
 	// message, err := userlib.RSAEncrypt(&pub, signed_msg[:190], []byte("Tag"))
-	// userlib.DebugMsg("Signed msg : %v", message)
+	userlib.DebugMsg("before Encryption message msg : %x", encryptedmessage)
+	userlib.DebugMsg("After Encryption message msg : %x", decryptedmessage)
 	msgid = string(signed_msg)
 	userlib.DebugMsg("Length : %v", msgid)
 	userlib.DebugMsg("reached2")
