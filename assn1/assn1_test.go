@@ -11,7 +11,7 @@ import "reflect"
 func TestInit(t *testing.T) {
 	t.Log("Initialization test")
 	userlib.DebugPrint = true
-//	someUsefulThings()
+	//	someUsefulThings()
 
 	userlib.DebugPrint = false
 	u, err := InitUser("alice", "fubar")
@@ -42,6 +42,7 @@ func TestStorage(t *testing.T) {
 		t.Error("Failed to reload user", err)
 		return
 	}
+	userlib.DebugPrint = true
 	t.Log("Loaded user", u)
 
 	v := []byte("This is a test")
@@ -52,12 +53,11 @@ func TestStorage(t *testing.T) {
 		t.Error("Failed to upload and download", err2)
 	}
 
-	t.Log("file1: " , v)
-	t.Log("file2: " , v2)
+	t.Log("file1: ", v)
+	t.Log("file2: ", v2)
 	if !reflect.DeepEqual(v, v2) {
 		t.Error("Downloaded file is not the same", v, v2)
 	}
-
 
 	// v3 := []byte("This is a testyyyy")
 	// u.StoreFile("file22", v3)
@@ -65,7 +65,6 @@ func TestStorage(t *testing.T) {
 	// if err2 != nil {
 	// 	t.Error("Failed to upload and download", err2)
 	// }
-
 
 	// t.Log("file1: " , v)
 	// t.Log("file2: " , v2)
@@ -76,6 +75,8 @@ func TestStorage(t *testing.T) {
 }
 
 func TestShare(t *testing.T) {
+	userlib.DebugPrint = true
+
 	u, err := GetUser("alice", "fubar")
 	if err != nil {
 		t.Error("Failed to reload user", err)
@@ -87,9 +88,9 @@ func TestShare(t *testing.T) {
 	}
 
 	//
-	v5 := []byte("This is a test")
-	u.StoreFile("file1", v5)
-	
+	// v5 := []byte("This is a test")
+	// u.StoreFile("file1", v5)
+
 	//
 
 	var v, v2 []byte
@@ -104,6 +105,8 @@ func TestShare(t *testing.T) {
 	if err != nil {
 		t.Error("Failed to share the a file", err)
 	}
+	t.Log("please")
+	t.Log(msgid)
 	err = u2.ReceiveFile("file2", "alice", msgid)
 	if err != nil {
 		t.Error("Failed to receive the share message", err)
@@ -117,4 +120,17 @@ func TestShare(t *testing.T) {
 		t.Error("Shared file is not the same", v, v2)
 	}
 
+}
+func TestAppend(t *testing.T) {
+	userlib.DebugPrint = true
+	u, err := GetUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to reload user", err)
+	}
+	v := []byte("Appended here")
+	err = u.AppendFile("file1", v)
+	v = []byte("Appended here again")
+	err = u.AppendFile("file1", v)
+	v2, err := u.LoadFile("file1")
+	t.Log(" Content : ", string(v2))
 }
