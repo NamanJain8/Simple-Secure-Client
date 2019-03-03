@@ -86,9 +86,9 @@ type User struct {
 	Argon_pass   []byte             // Argon password
 	RSAkey       userlib.PrivateKey // Public Private pair for user RSA
 	Filemap      map[string]string  // Map for filename -> location
+	Metamap      map[string]string  // location of the metamap
 	Filekey      map[string][]byte  // Hex string for filekey
 	Userhmackeys map[string][]byte  // H (k,E(file))
-	Filesign     map[string][]byte  // store HMAC of the encrypted text and compare it when reading encrypted text
 	SHA          string             // hex string for SHA of above data (see GenerateUserHash)
 }
 type File struct {
@@ -102,6 +102,9 @@ type File struct {
 type File_data struct {
 	Data []byte
 	// SHA  string
+}
+type Meta struct {
+	Filesign []byte // store the H(k,E(m))
 }
 
 func toFileHash(filedata File) string {
@@ -194,7 +197,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.RSAkey = *key
 	userdata.Filemap = make(map[string]string)
 	userdata.Filekey = make(map[string][]byte)
-	userdata.Filesign = make(map[string][]byte)
+	userdata.Metamap = make(map[string]string)
 	userdata.Userhmackeys = make(map[string][]byte)
 	userdata.SHA = toUserHash(userdata)
 
@@ -286,12 +289,15 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	filehmackey := userlib.RandomBytes(aesBlockSize) // Hmac key for content
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
+	var meta_filename = "meta" + "_" + effective_filename
 	addresskey := toSHAString(effective_filename)
 	addresskey2 := toSHAString(effective_filename2)
+	addresskey3 := toSHAString(meta_filename)
 	if userdata.Filemap[filename] != "" {
 		addresskey = userdata.Filemap[filename]
 		Ksym = userdata.Filekey[filename]
 		userhmackey = userdata.Userhmackeys[filename]
+		addresskey3 = userdata.Metamap[filename]
 	}
 
 	// here first file data would be stored
@@ -326,6 +332,9 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// filedata.SHA = toFileHash(filedata)
 	// userlib.DebugMsg("Found key in STORE : %x ", (filedata.Filehamckeys[0]))
 	// now encrypt it using Ksym
+
+	var metadata Meta
+
 	filebytes, _ := json.Marshal(filedata)
 	fileciphertext := AESEncrypt(filebytes, Ksym)
 
@@ -333,15 +342,21 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	mac := userlib.NewHMAC(userhmackey) // key is the bytes of the username itself
 	mac.Write(fileciphertext)
+
 	maca := mac.Sum(nil)
 	userdata.Userhmackeys[filename] = userhmackey // add Hmac Key
-	userdata.Filesign[filename] = maca            // add this to user struct
+	metadata.Filesign = maca
+	userlib.DebugMsg("store File : %x", maca) // add this to user struct
+
+	metabytes, _ := json.Marshal(metadata)
+	metaciphertext := AESEncrypt(metabytes, Ksym)
+	userlib.DatastoreSet(addresskey3, metaciphertext)
 
 	// Now we need to set map in user struct and Sign of file
 	userdata.Filemap[filename] = addresskey
 	// KsymString := string(Ksym)
 	userdata.Filekey[filename] = Ksym
-
+	userdata.Metamap[filename] = addresskey3
 	// remodify the userdata hash ===== importtant
 	userdata.SHA = toUserHash(*userdata)
 
@@ -374,10 +389,10 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	mac := userlib.NewHMAC(userdata.Userhmackeys[filename]) // key is the bytes of the username itself
 	mac.Write(bytes)
 	maca := mac.Sum(nil)
-	if userlib.Equal([]byte(maca), []byte(userdata.Filesign[filename])) != true {
-		err := errors.New("[LoadFile] File tampered2")
-		return err
-	}
+	// if userlib.Equal([]byte(maca), []byte(userdata.Filesign[filename])) != true {
+	// 	err := errors.New("[LoadFile] File tampered2")
+	// 	return err
+	// }
 
 	// Decrypt using Ksym as key
 
@@ -431,11 +446,19 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	filebytes, _ := json.Marshal(file)
 	fileciphertext := AESEncrypt(filebytes, Ksym)
 
+	var metadata Meta
+
 	// now update the Hmac sign in the user struct
 	mac = userlib.NewHMAC(userdata.Userhmackeys[filename])
 	mac.Write(fileciphertext)
 	maca = mac.Sum(nil)
-	userdata.Filesign[filename] = maca
+	metadata.Filesign = maca
+
+	metabytes, _ := json.Marshal(metadata)
+	metaciphertext := AESEncrypt(metabytes, Ksym)
+	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
+
+	// userdata.Filesign[filename] = maca
 	userdata.SHA = toUserHash(*userdata)
 
 	s := toSHAString(userdata.Username)
@@ -459,10 +482,18 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	bytes, valid := userlib.DatastoreGet(addresskey)
 	// userlib.DebugMsg("Found bytes from store : %x", bytes)
 
+	metabytes, valid := userlib.DatastoreGet(userdata.Metamap[filename])
+	metaciphertext := AESDecrypt(metabytes, Ksym)
+	var metadata Meta
+	_ = json.Unmarshal(metaciphertext, &metadata)
+
 	mac := userlib.NewHMAC(userdata.Userhmackeys[filename]) // key is the bytes of the username itself
 	mac.Write(bytes)
 	maca := mac.Sum(nil)
-	if userlib.Equal([]byte(maca), []byte(userdata.Filesign[filename])) != true {
+	userlib.DebugMsg("Load file : %x", maca)
+	userlib.DebugMsg("Load file : %x", []byte(metadata.Filesign))
+
+	if userlib.Equal([]byte(maca), []byte(metadata.Filesign)) != true {
 		err := errors.New("[LoadFile] File tampered2")
 		return nil, err
 	}
@@ -545,7 +576,7 @@ type sharingRecord struct {
 	Addresskey    string // Key of file in datastore
 	Symmetric_key []byte // Symmetric Key of file
 	Userhmackey   []byte // send the key to the other user as well to sign the content
-	Filesign      []byte // get the file sign as well to check if he recieved the correct file
+	Metadatakey   string // get the file sign as well to check if he recieved the correct file
 	RSA_Sign      []byte // RSA_Sign to verify integrity of this message
 }
 
@@ -568,7 +599,8 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	record.Addresskey = userdata.Filemap[filename]
 	record.Symmetric_key = userdata.Filekey[filename]
 	record.Userhmackey = userdata.Userhmackeys[filename] // can check here for integrity as well if needed
-	record.Filesign = userdata.Filesign[filename]
+	record.Metadatakey = userdata.Metamap[filename]
+	// record.Filesign = userdata.Filesign[filename]
 
 	_, err2 := userlib.DatastoreGet(record.Addresskey)
 	if !err2 {
@@ -607,7 +639,7 @@ func recordToMsg(record sharingRecord) []byte {
 	recordreq.Addresskey = record.Addresskey
 	recordreq.Symmetric_key = record.Symmetric_key
 	recordreq.Userhmackey = record.Userhmackey
-	recordreq.Filesign = record.Filesign
+	recordreq.Metadatakey = record.Metadatakey
 	bytes, _ := json.Marshal(recordreq)
 	return bytes
 }
@@ -657,7 +689,8 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 	Ksym := record.Symmetric_key
 	userdata.Filekey[filename] = Ksym
 	userdata.Userhmackeys[filename] = record.Userhmackey
-	userdata.Filesign[filename] = record.Filesign
+	// userdata.Filesign[filename] = record.Filesign
+	userdata.Metamap[filename] = record.Metadatakey
 
 	// remodify the userdata hash ===== importtant
 
