@@ -716,12 +716,12 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 
 	// check if the file actually belongs to the user
 
-	var effective_filename = userdata.Username + "_" + filename
-	addresskey := toSHAString(effective_filename)
-	if userlib.Equal([]byte(addresskey), []byte(userdata.Filemap[filename])) != true {
-		err := errors.New("cant be revoked")
-		return err
-	}
+	// var effective_filename = userdata.Username + "_" + filename
+	// addresskey := toSHAString(effective_filename)
+	// if userlib.Equal([]byte(addresskey), []byte(userdata.Filemap[filename])) != true {
+	// 	err := errors.New("cant be revoked")
+	// 	return err
+	// }
 
 	// Generate new symmetric key and get file
 	Ksym := userdata.Filekey[filename]
@@ -755,6 +755,17 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	filebytes, _ := json.Marshal(file)
 	fileciphertext := AESEncrypt(filebytes, Ksymnew)
 	userlib.DatastoreSet(file_addr, fileciphertext)
+
+	mac := userlib.NewHMAC(userdata.Userhmackeys[filename])
+	mac.Write(fileciphertext)
+	maca := mac.Sum(nil)
+
+	var metadata Meta
+	metadata.Filesign = maca
+
+	metabytes, _ := json.Marshal(metadata)
+	metaciphertext := AESEncrypt(metabytes, Ksymnew)
+	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
 
 	// remodify the userdata hash ===== importtant
 	userdata.SHA = toUserHash(*userdata)
