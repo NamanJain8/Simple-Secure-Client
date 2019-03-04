@@ -560,12 +560,6 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
 
 	// userdata.Filesign[filename] = maca
-	userdata.SHA = toUserHash(*userdata)
-
-	s := toSHAString(userdata.Username)
-	bytes, _ = json.Marshal(userdata)
-	ciphertext = AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
-	userlib.DatastoreSet(s, ciphertext)
 
 	// place on the data store
 	userlib.DatastoreSet(addressKey, fileciphertext)
