@@ -82,8 +82,9 @@ var aesBlockSize = userlib.BlockSize
 // The structure definition for a user record
 type User struct {
 	// All fields must be capital for JSON marshal to work
-	Username     string             // Username
-	Argon_pass   []byte             // Argon password
+	Username     string // Username
+	Argon_pass   []byte // Argon password
+	Password     string
 	RSAkey       userlib.PrivateKey // Public Private pair for user RSA
 	Filemap      map[string]string  // Map for filename -> location
 	Metamap      map[string]string  // location of the metamap
@@ -158,6 +159,7 @@ func toUserHash(userdata User) string {
 	userreq.RSAkey = userdata.RSAkey
 	userreq.Filemap = userdata.Filemap
 	userreq.Filekey = userdata.Filekey
+	userreq.Password = userdata.Password
 	bytes, _ := json.Marshal(userreq)
 	hash := userlib.NewSHA256()
 	hash.Write([]byte(bytes))
@@ -229,6 +231,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.Filemap = make(map[string]string)
 	userdata.Filekey = make(map[string][]byte)
 	userdata.Metamap = make(map[string]string)
+	userdata.Password = password
 	userdata.Userhmackeys = make(map[string][]byte)
 	userdata.SHA = toUserHash(userdata)
 
@@ -287,6 +290,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		return nil, err
 	}
 
+	userlib.DebugMsg("User address: %v", &userdata)
 	return &userdata, nil
 }
 func toFiledataHash(filedata File_data) string {
@@ -317,6 +321,8 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string) {
 //
 // The name of the file should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
+	userdata, _ = GetUser(userdata.Username, userdata.Password)
+
 	// generate all required contents first : IV(K_sym),'key' where to store this struct
 	Ksym := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
 	aeskey := userlib.RandomBytes(aesBlockSize)
@@ -413,6 +419,43 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // metadata you need.
 
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	mys := toSHAString(userdata.Username)
+	mybytes, valid := userlib.DatastoreGet(mys)
+
+	// Return error if user not found
+	if !valid {
+		err := errors.New("[GetUser] DataStore corrupted or user not found")
+		return err
+	}
+
+	if len(mybytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return err
+	}
+	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass)
+
+	// Unmarshal into User structure
+	var myuserdata User
+	err = json.Unmarshal(myciphertext, &myuserdata)
+	if err != nil {
+		userlib.DebugMsg("[get user] error in unmarshal ", err)
+		return err
+	}
+
+	// Compare hash and throw error if not matched
+	mynewhash := toUserHash(myuserdata)
+	if userlib.Equal([]byte(mynewhash), []byte(myuserdata.SHA)) != true {
+		err := errors.New("[GetUser] Userdata tampered")
+		return err
+	}
+
+	userlib.DebugMsg("User address: %v", &userdata)
+	*userdata = myuserdata
+
+	// ================================================================
+
 	addressKey := userdata.Filemap[filename]
 	Ksym := userdata.Filekey[filename]
 	bytes, valid := userlib.DatastoreGet(addressKey)
@@ -513,6 +556,11 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
+
+	// reload the user ====
+
+	userdata, _ = GetUser(userdata.Username, userdata.Password)
+
 	// get address of the corresponding File struct
 	addresskey := userdata.Filemap[filename] // get string of the address
 	Ksym := userdata.Filekey[filename]       // get Symmetric Key for decryption
@@ -643,6 +691,7 @@ type sharingRecord struct {
 
 func (userdata *User) ShareFile(filename string, recipient string) (
 	msgid string, err error) {
+	userdata, _ = GetUser(userdata.Username, userdata.Password)
 
 	var record sharingRecord
 	// Fill up record
@@ -700,6 +749,8 @@ func recordToMsg(record sharingRecord) []byte {
 // it is authentically from the sender.
 func (userdata *User) ReceiveFile(filename string, sender string,
 	msgid string) error {
+	userdata, _ = GetUser(userdata.Username, userdata.Password)
+
 	// Decrypt the message
 	encryptedmessage := []byte(msgid)
 	decryptedmessage := make([]byte, 0)
@@ -763,6 +814,7 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 
 // Removes access for all others.
 func (userdata *User) RevokeFile(filename string) (err error) {
+	userdata, _ = GetUser(userdata.Username, userdata.Password)
 
 	// check if the file actually belongs to the user
 
