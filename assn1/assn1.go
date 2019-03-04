@@ -8,6 +8,8 @@ import (
 	// You neet to add with
 	// go get github.com/fenilfadadu/CS628-assn1/userlib
 
+	"time"
+
 	"github.com/fenilfadadu/CS628-assn1/userlib"
 
 	// Life is much easier with json:  You are
@@ -78,28 +80,37 @@ var aesBlockSize = userlib.BlockSize
 // The structure definition for a user record
 type User struct {
 	// All fields must be capital for JSON marshal to work
-	Username     string // Username
-	Argon_pass   []byte // Argon password
-	Password     string
-	RSAkey       userlib.PrivateKey // Public Private pair for user RSA
-	Filemap      map[string]string  // Map for filename -> location
-	Metamap      map[string]string  // location of the metamap
-	Filekey      map[string][]byte  // Hex string for filekey
-	FileIV       map[string][]byte  // Store file IVs
-	Userhmackeys map[string][]byte  // H (k,E(file))
-	SHA          string             // hex string for SHA of above data (see GenerateUserHash)
+	Username   string // Username
+	Argon_pass []byte // Argon password
+	Password   string
+	RSAkey     userlib.PrivateKey // Public Private pair for user RSA
+	Filemap    map[string]string  // Map for filename -> location
+	Metamap    map[string]string  // location of the metamap
+	Filekey    map[string][]byte  // Hex string for filekey
+	FileIV     map[string][]byte  // Store file IVs
+	SHA        string             // hex string for SHA of above data (see GenerateUserHash)
 }
 type File struct {
-	Symmetric_key []byte   // Symmetric key (also IV) for encrypting the corresponding contents
-	Locations     []string // locations at which these segments of file would be stored
-	// Hash_locations []string // hash of location_data for integrity check
-	Filehamckeys [][]byte // byte of hmac keys of the content
-	FileDataIV   [][]byte // File Data IVs
-	Datasigns    [][]byte // Hmac sign of the corresponding content H(k,E(data))
+	Symmetric_key []byte // Symmetric key (also IV) for encrypting the corresponding contents
+	First         string
+	Last          string
+	FirstIV       []byte
+	LastIV        []byte
+	FirstHMACKey  []byte
+	LastHMACKey   []byte
+	// Locations     []string // locations at which these segments of file would be stored
+	// // Hash_locations []string // hash of location_data for integrity check
+	// Filehamckeys [][]byte // byte of hmac keys of the content
+	// FileDataIV   [][]byte // File Data IVs
+	// Datasigns    [][]byte // Hmac sign of the corresponding content H(k,E(data))
 	// SHA            string   // hex string for SHA of above data
 }
 type File_data struct {
-	Data []byte
+	Next        string
+	NextIV      []byte
+	NextHMACKey []byte
+	Data        []byte
+	Sign        []byte
 	// SHA  string
 }
 type Meta struct {
@@ -137,18 +148,19 @@ func (user *User) GetInodeKey(filename string) string {
 	return fileKey
 }
 
-func toFileHash(filedata File) string {
-	var filereq File
-	filereq.Symmetric_key = filedata.Symmetric_key
-	filereq.Locations = filedata.Locations
-	// filereq.Hash_locations = filedata.Hash_locations
-	bytes, _ := json.Marshal(filereq)
-	userlib.DebugMsg("This would be converted to SHA : %x", bytes)
-	hash := userlib.NewSHA256()
-	hash.Write([]byte(bytes))
-	sha := hex.EncodeToString(hash.Sum(nil))
-	return sha
-}
+// func toFileHash(filedata File) string {
+// 	var filereq File
+// 	filereq.Symmetric_key = filedata.Symmetric_key
+// 	filereq.Last =
+// 	// filereq.Locations = filedata.Locations
+// 	// filereq.Hash_locations = filedata.Hash_locations
+// 	bytes, _ := json.Marshal(filereq)
+// 	userlib.DebugMsg("This would be converted to SHA : %x", bytes)
+// 	hash := userlib.NewSHA256()
+// 	hash.Write([]byte(bytes))
+// 	sha := hex.EncodeToString(hash.Sum(nil))
+// 	return sha
+// }
 
 func toUserHash(userdata User) string {
 	var userreq User
@@ -264,7 +276,6 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.FileIV = make(map[string][]byte)
 	userdata.Metamap = make(map[string]string)
 	userdata.Password = password
-	userdata.Userhmackeys = make(map[string][]byte)
 	userdata.SHA = toUserHash(userdata)
 
 	// Insert into DataStore with encryption
@@ -325,19 +336,24 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	userlib.DebugMsg("User address: %v", &userdata)
 	return &userdata, nil
 }
-func toFiledataHash(filedata File_data) string {
-	hash := userlib.NewSHA256()
-	hash.Write([]byte(filedata.Data))
-	sha := hex.EncodeToString(hash.Sum(nil)) // this is the SHA of data
-	return sha
-}
 
-func storeFiledata(data []byte, aeskey []byte, addressKey string, iv []byte) {
+// func toFiledataHash(filedata File_data) string {
+// 	hash := userlib.NewSHA256()
+// 	hash.Write([]byte(filedata.Data))
+// 	sha := hex.EncodeToString(hash.Sum(nil)) // this is the SHA of data
+// 	return sha
+// }
+
+func storeFiledata(data []byte, aeskey []byte, addressKey string, iv []byte, HMACkey []byte) {
 
 	var filedata File_data
-	filedata.Data = data
-	// filedata.SHA = toFiledataHash(filedata)
 
+	mac := userlib.NewHMAC(HMACkey)
+	mac.Write(data)
+	maca := mac.Sum(nil)
+
+	filedata.Data = data
+	filedata.Sign = maca
 	// Now we need to encrypt it
 
 	bytes, _ := json.Marshal(filedata)
@@ -364,56 +380,41 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// generate all required contents first : IV(K_sym),'key' where to store this struct
 	Ksym := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
 	aeskey := userlib.RandomBytes(aesBlockSize)
-	userhmackey := userlib.RandomBytes(aesBlockSize) // generate a random HMAC key
-	filehmackey := userlib.RandomBytes(aesBlockSize) // Hmac key for content
-	fileDataIV := userlib.RandomBytes(aesBlockSize)  // Hmac key for content
-	fileIV := userlib.RandomBytes(aesBlockSize)      // Hmac key for content
+	firstHMACKey := userlib.RandomBytes(aesBlockSize) // Hmac key for first block
+	firstIV := userlib.RandomBytes(aesBlockSize)      // Hmac key for content
+	fileIV := userlib.RandomBytes(aesBlockSize)
+
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
 	var meta_filename = "meta" + "__" + effective_filename
-	addresskey := toSHAString(effective_filename)
-	addresskey2 := toSHAString(effective_filename2)
-	addresskey3 := toSHAString(meta_filename)
+	addresskey := toSHAString(effective_filename)   // file struct
+	addresskey2 := toSHAString(effective_filename2) // first content
+	addresskey3 := toSHAString(meta_filename)       // meta
 	if userdata.Filemap[filename] != "" {
 		addresskey = userdata.Filemap[filename]
 		Ksym = userdata.Filekey[filename]
-		userhmackey = userdata.Userhmackeys[filename]
 		addresskey3 = userdata.Metamap[filename]
-		fileIV = userdata.FileIV[filename]
+		fileIV = userdata.FileIV[filename] // Store file IVs
 	}
 
 	// here first file data would be stored
 	// addresskey2 would be stored in locations []
 	// store the file content where it is supposed to be
 
-	storeFiledata(data, aeskey, addresskey2, fileDataIV)
+	storeFiledata(data, aeskey, addresskey2, firstIV, firstHMACKey)
 	databytes, _ := userlib.DatastoreGet(addresskey2)
-	// find the sign for this content
-	datamac := userlib.NewHMAC(filehmackey)
-	datamac.Write(databytes)
-	datamaca := datamac.Sum(nil) // this is the required sign for the data that has been stored just now
-	// now we have 'key' for storing data and 'symmetric_key' for AES encryption
-	// Time to get hash(addressKey2,data) append addressKey2 + data and find SHA
-
-	// dataString := string(data)
-	// AddressContent := addresskey2 + dataString // element pf hash_locations []
-	// AddressContentHash := toSHAString(AddressContent)
 
 	// now set all the fileds in the structure
 
 	var filedata File
 	filedata.Symmetric_key = aeskey
-	filedata.Locations = make([]string, 0)
-	filedata.Locations = append([]string(filedata.Locations), addresskey2)
-	// filedata.Hash_locations = make([]string, 0)
-	// filedata.Hash_locations = append([]string(filedata.Hash_locations), AddressContentHash)
-	filedata.Filehamckeys = make([][]byte, 0)
-	filedata.Filehamckeys = append([][]byte(filedata.Filehamckeys), (filehmackey))
-	filedata.FileDataIV = append([][]byte(filedata.FileDataIV), (fileDataIV))
-	filedata.Datasigns = make([][]byte, 0)
-	filedata.Datasigns = append([][]byte(filedata.Datasigns), (datamaca))
-	// filedata.SHA = toFileHash(filedata)
-	// userlib.DebugMsg("Found key in STORE : %x ", (filedata.Filehamckeys[0]))
+	filedata.First = addresskey2
+	filedata.FirstIV = firstIV
+	filedata.FirstHMACKey = firstHMACKey
+	filedata.Last = addresskey2
+	filedata.LastIV = firstIV
+	filedata.LastHMACKey = firstHMACKey
+
 	// now encrypt it using Ksym
 
 	var metadata Meta
@@ -423,36 +424,34 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	// find the sign with username as the key
 
-	mac := userlib.NewHMAC(userhmackey) // key is the bytes of the username itself
+	mac := userlib.NewHMAC(Ksym) // HMAC same as symmetric
 	mac.Write(fileciphertext)
-
 	maca := mac.Sum(nil)
-	userdata.Userhmackeys[filename] = userhmackey // add Hmac Key
 	metadata.Filesign = maca
+
 	userlib.DebugMsg("store File : %x", maca) // add this to user struct
 
 	metabytes, _ := json.Marshal(metadata)
 	metaciphertext := AESEncrypt(metabytes, Ksym, fileIV)
-	userlib.DatastoreSet(addresskey3, metaciphertext)
 
 	// Now we need to set map in user struct and Sign of file
 	userdata.Filemap[filename] = addresskey
-	// KsymString := string(Ksym)
 	userdata.Filekey[filename] = Ksym
 	userdata.FileIV[filename] = fileIV
 	userdata.Metamap[filename] = addresskey3
+
 	// remodify the userdata hash ===== importtant
 	userdata.SHA = toUserHash(*userdata)
 
 	// re-enter the user struct in data store because has has been changed
-
 	s := toSHAString(userdata.Username)
 	bytes, _ := json.Marshal(userdata)
 	ciphertext := AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
-	userlib.DatastoreSet(s, ciphertext)
 
 	// place on the data store
+	userlib.DatastoreSet(s, ciphertext)
 	userlib.DatastoreSet(addresskey, fileciphertext)
+	userlib.DatastoreSet(addresskey3, metaciphertext)
 }
 
 // This adds on to an existing file.
@@ -461,9 +460,18 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // existing file, but only whatever additional information and
 // metadata you need.
 
+func toCheckMAC(filedata File_data) []byte {
+	var myfiledata File_data
+	myfiledata.Data = filedata.Data
+	myfiledata.Next = filedata.Next
+	myfiledata.NextIV = filedata.NextIV
+	myfiledata.NextHMACKey = filedata.NextHMACKey
+	bytes, _ := json.Marshal(myfiledata)
+	return bytes
+}
+
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	// start := time.Now()
-	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	start := time.Now()
 	// Reload user
 	userdata = ReloadUser(*userdata)
 	if userdata == nil {
@@ -482,19 +490,27 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		return err
 	}
 
-	mac := userlib.NewHMAC(userdata.Userhmackeys[filename]) // key is the bytes of the username itself
+	mac := userlib.NewHMAC(Ksym) // key is the bytes of the username itself
 	mac.Write(bytes)
 	maca := mac.Sum(nil)
-	// if userlib.Equal([]byte(maca), []byte(userdata.Filesign[filename])) != true {
-	// 	err := errors.New("[LoadFile] File tampered2")
-	// 	return err
-	// }
+
+	// Check integrity of file struct
+	metacipher, _ := userlib.DatastoreGet(userdata.Metamap[filename])
+	metabytes := AESDecrypt(metacipher, Ksym, fileIV)
+	var metadata Meta
+	_ = json.Unmarshal(metabytes, &metadata)
+
+	if userlib.Equal([]byte(maca), metadata.Filesign) != true {
+		err := errors.New("[LoadFile] File tampered2")
+		return err
+	}
 
 	// Decrypt using Ksym as key
 	if len(bytes) < aesBlockSize {
 		err = errors.New("Data store corrupted")
 		return err
 	}
+
 	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
 	var file File
 	err = json.Unmarshal(ciphertext, &file)
@@ -502,69 +518,78 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		userlib.DebugMsg("[append file] error in unmarshal ", err)
 		return err
 	}
-	// newhash := toFileHash(file)
-	// if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
-	// 	err := errors.New("[LoadFile] File tampered2")
-	// 	return err
-	// }
-	var effective_filename = userdata.Username + "_" + filename
-	var effective_filename2 = effective_filename + "_" + string(len(file.Locations))
-	addresskey2 := toSHAString(effective_filename2) // here new data has to be put
-	fileDataIV := userlib.RandomBytes(aesBlockSize) // Hmac key for content
 
-	storeFiledata(data, file.Symmetric_key, addresskey2, fileDataIV)
+	var last File_data
+	lastcipher, _ := userlib.DatastoreGet(file.Last)
+	lastbytes := AESDecrypt(lastcipher, file.Symmetric_key, file.LastIV)
+	_ = json.Unmarshal(lastbytes, &last)
+
+	// Check integrity of file struct
+	mac = userlib.NewHMAC(file.LastHMACKey)
+	lastmacbytes := toCheckMAC(last)
+	mac.Write(lastmacbytes)
+	maca = mac.Sum(nil)
+
+	if userlib.Equal([]byte(maca), last.Sign) != true {
+		err := errors.New("[LoadFile] File tampered2")
+		return err
+	}
+
+	next := toSHAString(string(userlib.RandomBytes(aesBlockSize)))
+	nextIV := userlib.RandomBytes(aesBlockSize) // Hmac key for content
+	nextHMACKey := userlib.RandomBytes(aesBlockSize)
+
+	storeFiledata(data, file.Symmetric_key, next, nextIV, nextHMACKey)
 
 	// append the sign for the new content
 
-	appendedbytes, _ := userlib.DatastoreGet(addresskey2)
-	filehmackey := userlib.RandomBytes(aesBlockSize) // Hmac key for content
-	mac = userlib.NewHMAC(filehmackey)
+	appendedbytes, _ := userlib.DatastoreGet(next)
+	mac = userlib.NewHMAC(nextHMACKey)
 	mac.Write(appendedbytes)
 	maca = mac.Sum(nil)
 
-	// append the hmac key and sign in the respective list
+	lastIV := file.LastIV // Last ka IV for future use
+	lastAddr := file.Last
+	lastHMACKey := file.LastHMACKey
 
-	file.Filehamckeys = append([][]byte(file.Filehamckeys), filehmackey)
-	file.FileDataIV = append([][]byte(file.FileDataIV), fileDataIV)
-	file.Datasigns = append([][]byte(file.Datasigns), maca)
-	// userlib.DebugMsg("Hmac key for appended : %x", filehmackey)
+	file.Last = next
+	file.LastIV = nextIV
+	file.LastHMACKey = nextHMACKey
 
-	// content jaa chuka hai, now its time to append to locations
-
-	file.Locations = append([]string(file.Locations), addresskey2)
-
-	// Now add the corresponding entry for hash locations
-	// dataString := string(data)
-	// AddressContent := addresskey2 + dataString // element pf hash_locations []
-	// AddressContentHash := toSHAString(AddressContent)
-	// file.Hash_locations = append([]string(file.Hash_locations), AddressContentHash)
-
-	// change SHA of the file
-	// file.SHA = toFileHash(file)
+	last.Next = next
+	last.NextIV = nextIV
+	last.NextHMACKey = nextHMACKey
+	mac = userlib.NewHMAC(Ksym)
+	mac.Write(toCheckMAC(last))
+	maca = mac.Sum(nil)
+	last.Sign = maca
 
 	// put back file in the data store
 
 	filebytes, _ := json.Marshal(file)
 	fileciphertext := AESEncrypt(filebytes, Ksym, fileIV)
 
-	var metadata Meta
-
+	var metadata2 Meta
+	start = time.Now()
 	// now update the Hmac sign in the user struct
-	mac = userlib.NewHMAC(userdata.Userhmackeys[filename])
+	mac = userlib.NewHMAC(Ksym)
 	mac.Write(fileciphertext)
 	maca = mac.Sum(nil)
 	metadata.Filesign = maca
 
-	metabytes, _ := json.Marshal(metadata)
-	metaciphertext := AESEncrypt(metabytes, Ksym, fileIV)
-	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
+	end := time.Now()
+	userlib.DebugMsg("Time taken inner: %d", (end.Sub(start)).Nanoseconds())
 
-	// userdata.Filesign[filename] = maca
+	metabytes2, _ := json.Marshal(metadata)
+	metaciphertext2 := AESEncrypt(metabytes2, Ksym, fileIV)
+
+	lastbytes, _ = json.Marshal(last)
+	lastcipher = AESEncrypt(lastbytes, Ksym, lastIV)
 
 	// place on the data store
 	userlib.DatastoreSet(addressKey, fileciphertext)
-	// end := time.Now()
-	// userlib.DebugMsg("Time taken for append: %d", (end.Sub(start)).Nanoseconds())
+	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext2)
+	userlib.DatastoreSet(lastAddr, lastcipher)
 	return
 }
 
@@ -572,15 +597,11 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
-	// start := time.Now()
-	// userdata, _ = GetUser(userdata.Username, userdata.Password)
 	// Reload user
 	userdata = ReloadUser(*userdata)
 	if userdata == nil {
-		// err2 := errors.New("aPPEND ERROR")
 		return
 	}
-	userlib.DebugMsg("Userdata in loadfile: %v", userdata)
 
 	// get address of the corresponding File struct
 	addresskey := userdata.Filemap[filename] // get string of the address
@@ -588,7 +609,11 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	fileIV := userdata.FileIV[filename]
 	// Ksym := ([]byte(KsymString))
 	bytes, valid := userlib.DatastoreGet(addresskey)
-	// userlib.DebugMsg("Found bytes from store : %x", bytes)
+
+	if !valid {
+		err := errors.New("[Load file] not found or corrupted")
+		return nil, err
+	}
 
 	metabytes, valid := userlib.DatastoreGet(userdata.Metamap[filename])
 	if len(metabytes) < aesBlockSize {
@@ -599,24 +624,20 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	var metadata Meta
 	_ = json.Unmarshal(metaciphertext, &metadata)
 
-	mac := userlib.NewHMAC(userdata.Userhmackeys[filename]) // key is the bytes of the username itself
+	mac := userlib.NewHMAC(Ksym) // key is the bytes of the username itself
 	mac.Write(bytes)
 	maca := mac.Sum(nil)
-	userlib.DebugMsg("Load file : %x", maca)
-	userlib.DebugMsg("Load file : %x", []byte(metadata.Filesign))
 
 	if userlib.Equal([]byte(maca), []byte(metadata.Filesign)) != true {
 		err := errors.New("[LoadFile] File tampered2")
 		return nil, err
 	}
 
-	// userlib.DebugMsg("addr key: %v", bytes)
 	// Return error if File not found
 	if !valid {
 		err := errors.New("[LoadFile] DataStore corrupted or File not found")
 		return nil, err
 	}
-	// userlib.DebugMsg("Sym key in load: %v", Ksym)
 
 	// Decrypt using Ksym as key
 	if len(bytes) < aesBlockSize {
