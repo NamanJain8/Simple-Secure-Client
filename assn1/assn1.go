@@ -90,12 +90,12 @@ type User struct {
 	SHA          string             // hex string for SHA of above data (see GenerateUserHash)
 }
 type File struct {
-	Symmetric_key  []byte   // Symmetric key (also IV) for encrypting the corresponding contents
-	Locations      []string // locations at which these segments of file would be stored
-	Hash_locations []string // hash of location_data for integrity check
-	Filehamckeys   [][]byte // byte of hmac keys of the content
-	FileDataIV     [][]byte // File Data IVs
-	Datasigns      [][]byte // Hmac sign of the corresponding content H(k,E(data))
+	Symmetric_key []byte   // Symmetric key (also IV) for encrypting the corresponding contents
+	Locations     []string // locations at which these segments of file would be stored
+	// Hash_locations []string // hash of location_data for integrity check
+	Filehamckeys [][]byte // byte of hmac keys of the content
+	FileDataIV   [][]byte // File Data IVs
+	Datasigns    [][]byte // Hmac sign of the corresponding content H(k,E(data))
 	// SHA            string   // hex string for SHA of above data
 }
 type File_data struct {
@@ -141,7 +141,7 @@ func toFileHash(filedata File) string {
 	var filereq File
 	filereq.Symmetric_key = filedata.Symmetric_key
 	filereq.Locations = filedata.Locations
-	filereq.Hash_locations = filedata.Hash_locations
+	// filereq.Hash_locations = filedata.Hash_locations
 	bytes, _ := json.Marshal(filereq)
 	userlib.DebugMsg("This would be converted to SHA : %x", bytes)
 	hash := userlib.NewSHA256()
@@ -395,9 +395,9 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// now we have 'key' for storing data and 'symmetric_key' for AES encryption
 	// Time to get hash(addressKey2,data) append addressKey2 + data and find SHA
 
-	dataString := string(data)
-	AddressContent := addresskey2 + dataString // element pf hash_locations []
-	AddressContentHash := toSHAString(AddressContent)
+	// dataString := string(data)
+	// AddressContent := addresskey2 + dataString // element pf hash_locations []
+	// AddressContentHash := toSHAString(AddressContent)
 
 	// now set all the fileds in the structure
 
@@ -405,8 +405,8 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	filedata.Symmetric_key = aeskey
 	filedata.Locations = make([]string, 0)
 	filedata.Locations = append([]string(filedata.Locations), addresskey2)
-	filedata.Hash_locations = make([]string, 0)
-	filedata.Hash_locations = append([]string(filedata.Hash_locations), AddressContentHash)
+	// filedata.Hash_locations = make([]string, 0)
+	// filedata.Hash_locations = append([]string(filedata.Hash_locations), AddressContentHash)
 	filedata.Filehamckeys = make([][]byte, 0)
 	filedata.Filehamckeys = append([][]byte(filedata.Filehamckeys), (filehmackey))
 	filedata.FileDataIV = append([][]byte(filedata.FileDataIV), (fileDataIV))
@@ -534,10 +534,10 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	file.Locations = append([]string(file.Locations), addresskey2)
 
 	// Now add the corresponding entry for hash locations
-	dataString := string(data)
-	AddressContent := addresskey2 + dataString // element pf hash_locations []
-	AddressContentHash := toSHAString(AddressContent)
-	file.Hash_locations = append([]string(file.Hash_locations), AddressContentHash)
+	// dataString := string(data)
+	// AddressContent := addresskey2 + dataString // element pf hash_locations []
+	// AddressContentHash := toSHAString(AddressContent)
+	// file.Hash_locations = append([]string(file.Hash_locations), AddressContentHash)
 
 	// change SHA of the file
 	// file.SHA = toFileHash(file)
@@ -682,13 +682,13 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		// }
 
 		dataString := string(filedata.Data)
-		AddressContent := element + dataString // element pf hash_locations []
-		AddressContentHash := toSHAString(AddressContent)
+		// AddressContent := element + dataString // element pf hash_locations []
+		// AddressContentHash := toSHAString(AddressContent)
 
-		if userlib.Equal([]byte(AddressContentHash), []byte(file.Hash_locations[index])) != true {
-			err := errors.New("[LoadFile] File tampered")
-			return nil, err
-		}
+		// if userlib.Equal([]byte(AddressContentHash), []byte(file.Hash_locations[index])) != true {
+		// 	err := errors.New("[LoadFile] File tampered")
+		// 	return nil, err
+		// }
 		// now this content has been verified, convert to string and append
 		content += dataString
 	}
