@@ -98,6 +98,7 @@ type File struct {
 	Locations      []string // locations at which these segments of file would be stored
 	Hash_locations []string // hash of location_data for integrity check
 	Filehamckeys   [][]byte // byte of hmac keys of the content
+	FileDataIV     [][]byte // File Data IVs
 	Datasigns      [][]byte // Hmac sign of the corresponding content H(k,E(data))
 	// SHA            string   // hex string for SHA of above data
 }
@@ -300,7 +301,7 @@ func toFiledataHash(filedata File_data) string {
 	return sha
 }
 
-func storeFiledata(data []byte, aeskey []byte, addressKey string) {
+func storeFiledata(data []byte, aeskey []byte, addressKey string, iv []byte) {
 
 	var filedata File_data
 	filedata.Data = data
@@ -309,7 +310,7 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string) {
 	// Now we need to encrypt it
 
 	bytes, _ := json.Marshal(filedata)
-	ciphertext := AESEncrypt(bytes, aeskey, aeskey)
+	ciphertext := AESEncrypt(bytes, aeskey, iv)
 
 	// Now set it to the datastore
 
@@ -328,6 +329,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	aeskey := userlib.RandomBytes(aesBlockSize)
 	userhmackey := userlib.RandomBytes(aesBlockSize) // generate a random HMAC key
 	filehmackey := userlib.RandomBytes(aesBlockSize) // Hmac key for content
+	fileDataIV := userlib.RandomBytes(aesBlockSize)  // Hmac key for content
 	fileIV := userlib.RandomBytes(aesBlockSize)      // Hmac key for content
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
@@ -347,7 +349,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	// addresskey2 would be stored in locations []
 	// store the file content where it is supposed to be
 
-	storeFiledata(data, aeskey, addresskey2)
+	storeFiledata(data, aeskey, addresskey2, fileDataIV)
 	databytes, _ := userlib.DatastoreGet(addresskey2)
 	// find the sign for this content
 	datamac := userlib.NewHMAC(filehmackey)
@@ -370,6 +372,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	filedata.Hash_locations = append([]string(filedata.Hash_locations), AddressContentHash)
 	filedata.Filehamckeys = make([][]byte, 0)
 	filedata.Filehamckeys = append([][]byte(filedata.Filehamckeys), (filehmackey))
+	filedata.FileDataIV = append([][]byte(filedata.FileDataIV), (fileDataIV))
 	filedata.Datasigns = make([][]byte, 0)
 	filedata.Datasigns = append([][]byte(filedata.Datasigns), (datamaca))
 	// filedata.SHA = toFileHash(filedata)
@@ -496,8 +499,9 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(len(file.Locations))
 	addresskey2 := toSHAString(effective_filename2) // here new data has to be put
+	fileDataIV := userlib.RandomBytes(aesBlockSize) // Hmac key for content
 
-	storeFiledata(data, file.Symmetric_key, addresskey2)
+	storeFiledata(data, file.Symmetric_key, addresskey2, fileDataIV)
 
 	// append the sign for the new content
 
@@ -510,6 +514,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	// append the hmac key and sign in the respective list
 
 	file.Filehamckeys = append([][]byte(file.Filehamckeys), filehmackey)
+	file.FileDataIV = append([][]byte(file.FileDataIV), fileDataIV)
 	file.Datasigns = append([][]byte(file.Datasigns), maca)
 	// userlib.DebugMsg("Hmac key for appended : %x", filehmackey)
 
@@ -644,7 +649,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 			err = errors.New("Data store corrupted")
 			return nil, err
 		}
-		ciphertext := AESDecrypt(databytes, aeskey, aeskey)
+		ciphertext := AESDecrypt(databytes, aeskey, []byte(file.FileDataIV[index]))
 
 		var filedata File_data
 		err = json.Unmarshal(ciphertext, &filedata)
