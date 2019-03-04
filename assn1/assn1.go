@@ -64,10 +64,6 @@ func someUsefulThings() {
 	userlib.DebugMsg("Key is %v", key)
 }
 
-// func structToBytes(){
-
-// }
-
 // Helper function: Takes the first 16 bytes and
 // converts it into the UUID type
 func bytesToUUID(data []byte) (ret uuid.UUID) {
@@ -89,7 +85,7 @@ type User struct {
 	Filemap      map[string]string  // Map for filename -> location
 	Metamap      map[string]string  // location of the metamap
 	Filekey      map[string][]byte  // Hex string for filekey
-	FileIV       map[string][]byte  // Stopre file IVs
+	FileIV       map[string][]byte  // Store file IVs
 	Userhmackeys map[string][]byte  // H (k,E(file))
 	SHA          string             // hex string for SHA of above data (see GenerateUserHash)
 }
@@ -181,6 +177,41 @@ func toSHAString(key string) string {
 // Takes password and salt, return 16 byte argon2hash
 func toArgon2Hash(password string, salt string) []byte {
 	return userlib.Argon2Key([]byte(password), []byte(salt), 16)
+}
+
+func ReloadUser(userdata User) *User {
+	mys := toSHAString(userdata.Username)
+	mybytes, valid := userlib.DatastoreGet(mys)
+
+	// Return error if user not found
+	if !valid {
+		// err := errors.New("[GetUser] DataStore corrupted or user not found")
+		return nil
+	}
+
+	if len(mybytes) < aesBlockSize {
+		// err := errors.New("Data store corrupted")
+		return nil
+	}
+	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass, userdata.Argon_pass)
+
+	// Unmarshal into User structure
+	var myuserdata User
+	err := json.Unmarshal(myciphertext, &myuserdata)
+	if err != nil {
+		userlib.DebugMsg("[get user] error in unmarshal ", err)
+		return nil
+	}
+
+	// Compare hash and throw error if not matched
+	mynewhash := toUserHash(myuserdata)
+	if userlib.Equal([]byte(mynewhash), []byte(myuserdata.SHA)) != true {
+		// err := errors.New("[GetUser] Userdata tampered")
+		return nil
+	}
+
+	// userlib.DebugMsg("User address: %v", &userdata)
+	return &myuserdata
 }
 
 func AESEncrypt(bytes []byte, key []byte, iv []byte) []byte {
@@ -322,7 +353,13 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string, iv []byte) {
 //
 // The name of the file should NOT be revealed to the datastore!
 func (userdata *User) StoreFile(filename string, data []byte) {
-	userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	userdata = ReloadUser(*userdata)
+	if userdata == nil {
+		// err2 := errors.New("aPPEND ERROR")
+		return
+	}
 
 	// generate all required contents first : IV(K_sym),'key' where to store this struct
 	Ksym := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
@@ -333,7 +370,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	fileIV := userlib.RandomBytes(aesBlockSize)      // Hmac key for content
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
-	var meta_filename = "meta" + "_" + effective_filename
+	var meta_filename = "meta" + "__" + effective_filename
 	addresskey := toSHAString(effective_filename)
 	addresskey2 := toSHAString(effective_filename2)
 	addresskey3 := toSHAString(meta_filename)
@@ -425,40 +462,14 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // metadata you need.
 
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
+	// start := time.Now()
 	// userdata, _ = GetUser(userdata.Username, userdata.Password)
 	// Reload user
-	mys := toSHAString(userdata.Username)
-	mybytes, valid := userlib.DatastoreGet(mys)
-
-	// Return error if user not found
-	if !valid {
-		err := errors.New("[GetUser] DataStore corrupted or user not found")
-		return err
+	userdata = ReloadUser(*userdata)
+	if userdata == nil {
+		err2 := errors.New("aPPEND ERROR")
+		return err2
 	}
-
-	if len(mybytes) < aesBlockSize {
-		err = errors.New("Data store corrupted")
-		return err
-	}
-	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass, userdata.Argon_pass)
-
-	// Unmarshal into User structure
-	var myuserdata User
-	err = json.Unmarshal(myciphertext, &myuserdata)
-	if err != nil {
-		userlib.DebugMsg("[get user] error in unmarshal ", err)
-		return err
-	}
-
-	// Compare hash and throw error if not matched
-	mynewhash := toUserHash(myuserdata)
-	if userlib.Equal([]byte(mynewhash), []byte(myuserdata.SHA)) != true {
-		err := errors.New("[GetUser] Userdata tampered")
-		return err
-	}
-
-	userlib.DebugMsg("User address: %v", &userdata)
-	*userdata = myuserdata
 
 	// ================================================================
 
@@ -558,6 +569,8 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 
 	// place on the data store
 	userlib.DatastoreSet(addressKey, fileciphertext)
+	// end := time.Now()
+	// userlib.DebugMsg("Time taken for append: %d", (end.Sub(start)).Nanoseconds())
 	return
 }
 
@@ -565,10 +578,15 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 //
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
-
-	// reload the user ====
-
-	userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// start := time.Now()
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	userdata = ReloadUser(*userdata)
+	if userdata == nil {
+		// err2 := errors.New("aPPEND ERROR")
+		return
+	}
+	userlib.DebugMsg("Userdata in loadfile: %v", userdata)
 
 	// get address of the corresponding File struct
 	addresskey := userdata.Filemap[filename] // get string of the address
@@ -675,6 +693,9 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		content += dataString
 	}
 	data = ([]byte(content))
+
+	// end := time.Now()
+	// userlib.DebugMsg("Time taken for load: %d", (end.Sub(start)).Nanoseconds())
 	return data, err
 }
 
@@ -702,7 +723,13 @@ type sharingRecord struct {
 
 func (userdata *User) ShareFile(filename string, recipient string) (
 	msgid string, err error) {
-	userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	userdata = ReloadUser(*userdata)
+	if userdata == nil {
+		// err2 := errors.New("aPPEND ERROR")
+		return
+	}
 
 	var record sharingRecord
 	// Fill up record
@@ -762,8 +789,13 @@ func recordToMsg(record sharingRecord) []byte {
 // it is authentically from the sender.
 func (userdata *User) ReceiveFile(filename string, sender string,
 	msgid string) error {
-	userdata, _ = GetUser(userdata.Username, userdata.Password)
-
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	userdata = ReloadUser(*userdata)
+	if userdata == nil {
+		err2 := errors.New("aPPEND ERROR")
+		return err2
+	}
 	// Decrypt the message
 	encryptedmessage := []byte(msgid)
 	decryptedmessage := make([]byte, 0)
