@@ -89,6 +89,7 @@ type User struct {
 	Filemap      map[string]string  // Map for filename -> location
 	Metamap      map[string]string  // location of the metamap
 	Filekey      map[string][]byte  // Hex string for filekey
+	FileIV       map[string][]byte  // Stopre file IVs
 	Userhmackeys map[string][]byte  // H (k,E(file))
 	SHA          string             // hex string for SHA of above data (see GenerateUserHash)
 }
@@ -160,6 +161,7 @@ func toUserHash(userdata User) string {
 	userreq.Filemap = userdata.Filemap
 	userreq.Filekey = userdata.Filekey
 	userreq.Password = userdata.Password
+	userreq.FileIV = userdata.FileIV
 	bytes, _ := json.Marshal(userreq)
 	hash := userlib.NewSHA256()
 	hash.Write([]byte(bytes))
@@ -180,19 +182,16 @@ func toArgon2Hash(password string, salt string) []byte {
 	return userlib.Argon2Key([]byte(password), []byte(salt), 16)
 }
 
-func AESEncrypt(bytes []byte, key []byte) []byte {
+func AESEncrypt(bytes []byte, key []byte, iv []byte) []byte {
 	ciphertext := make([]byte, aesBlockSize+len(bytes))
-	iv := ciphertext[:aesBlockSize]
-	copy(iv, key[:aesBlockSize])
+	copy(ciphertext[:aesBlockSize], iv)
 	cipher := userlib.CFBEncrypter(key, iv)
 	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes)
 	return ciphertext
 }
 
-func AESDecrypt(bytes []byte, key []byte) []byte {
+func AESDecrypt(bytes []byte, key []byte, iv []byte) []byte {
 	ciphertext := make([]byte, len(bytes))
-	iv := make([]byte, aesBlockSize)
-	copy(iv, key[:aesBlockSize])
 	cipher := userlib.CFBDecrypter(key, iv)
 	cipher.XORKeyStream(ciphertext[aesBlockSize:], bytes[aesBlockSize:])
 	return ciphertext[aesBlockSize:]
@@ -230,6 +229,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.RSAkey = *key
 	userdata.Filemap = make(map[string]string)
 	userdata.Filekey = make(map[string][]byte)
+	userdata.FileIV = make(map[string][]byte)
 	userdata.Metamap = make(map[string]string)
 	userdata.Password = password
 	userdata.Userhmackeys = make(map[string][]byte)
@@ -238,7 +238,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	// Insert into DataStore with encryption
 	s := toSHAString(username)
 	bytes, _ := json.Marshal(userdata)
-	ciphertext := AESEncrypt(bytes, argon_pass)
+	ciphertext := AESEncrypt(bytes, argon_pass, argon_pass)
 	userlib.DatastoreSet(s, ciphertext)
 
 	// Ensure if inserted or not
@@ -273,7 +273,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		err = errors.New("Data store corrupted")
 		return nil, err
 	}
-	ciphertext := AESDecrypt(bytes, argon_pass)
+	ciphertext := AESDecrypt(bytes, argon_pass, argon_pass)
 
 	// Unmarshal into User structure
 	var userdata User
@@ -309,7 +309,7 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string) {
 	// Now we need to encrypt it
 
 	bytes, _ := json.Marshal(filedata)
-	ciphertext := AESEncrypt(bytes, aeskey)
+	ciphertext := AESEncrypt(bytes, aeskey, aeskey)
 
 	// Now set it to the datastore
 
@@ -328,6 +328,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	aeskey := userlib.RandomBytes(aesBlockSize)
 	userhmackey := userlib.RandomBytes(aesBlockSize) // generate a random HMAC key
 	filehmackey := userlib.RandomBytes(aesBlockSize) // Hmac key for content
+	fileIV := userlib.RandomBytes(aesBlockSize)      // Hmac key for content
 	var effective_filename = userdata.Username + "_" + filename
 	var effective_filename2 = effective_filename + "_" + string(0)
 	var meta_filename = "meta" + "_" + effective_filename
@@ -339,6 +340,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 		Ksym = userdata.Filekey[filename]
 		userhmackey = userdata.Userhmackeys[filename]
 		addresskey3 = userdata.Metamap[filename]
+		fileIV = userdata.FileIV[filename]
 	}
 
 	// here first file data would be stored
@@ -377,7 +379,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	var metadata Meta
 
 	filebytes, _ := json.Marshal(filedata)
-	fileciphertext := AESEncrypt(filebytes, Ksym)
+	fileciphertext := AESEncrypt(filebytes, Ksym, fileIV)
 
 	// find the sign with username as the key
 
@@ -390,13 +392,14 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 	userlib.DebugMsg("store File : %x", maca) // add this to user struct
 
 	metabytes, _ := json.Marshal(metadata)
-	metaciphertext := AESEncrypt(metabytes, Ksym)
+	metaciphertext := AESEncrypt(metabytes, Ksym, fileIV)
 	userlib.DatastoreSet(addresskey3, metaciphertext)
 
 	// Now we need to set map in user struct and Sign of file
 	userdata.Filemap[filename] = addresskey
 	// KsymString := string(Ksym)
 	userdata.Filekey[filename] = Ksym
+	userdata.FileIV[filename] = fileIV
 	userdata.Metamap[filename] = addresskey3
 	// remodify the userdata hash ===== importtant
 	userdata.SHA = toUserHash(*userdata)
@@ -405,7 +408,7 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 
 	s := toSHAString(userdata.Username)
 	bytes, _ := json.Marshal(userdata)
-	ciphertext := AESEncrypt(bytes, userdata.Argon_pass)
+	ciphertext := AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
 	userlib.DatastoreSet(s, ciphertext)
 
 	// place on the data store
@@ -434,7 +437,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		err = errors.New("Data store corrupted")
 		return err
 	}
-	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass)
+	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass, userdata.Argon_pass)
 
 	// Unmarshal into User structure
 	var myuserdata User
@@ -458,6 +461,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 
 	addressKey := userdata.Filemap[filename]
 	Ksym := userdata.Filekey[filename]
+	fileIV := userdata.FileIV[filename]
 	bytes, valid := userlib.DatastoreGet(addressKey)
 	if !valid {
 		err := errors.New("[LoadFile] DataStore corrupted or File not found")
@@ -477,7 +481,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 		err = errors.New("Data store corrupted")
 		return err
 	}
-	ciphertext := AESDecrypt(bytes, Ksym)
+	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
 	var file File
 	err = json.Unmarshal(ciphertext, &file)
 	if err != nil {
@@ -525,7 +529,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	// put back file in the data store
 
 	filebytes, _ := json.Marshal(file)
-	fileciphertext := AESEncrypt(filebytes, Ksym)
+	fileciphertext := AESEncrypt(filebytes, Ksym, fileIV)
 
 	var metadata Meta
 
@@ -536,7 +540,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	metadata.Filesign = maca
 
 	metabytes, _ := json.Marshal(metadata)
-	metaciphertext := AESEncrypt(metabytes, Ksym)
+	metaciphertext := AESEncrypt(metabytes, Ksym, fileIV)
 	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
 
 	// userdata.Filesign[filename] = maca
@@ -544,7 +548,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 
 	s := toSHAString(userdata.Username)
 	bytes, _ = json.Marshal(userdata)
-	ciphertext = AESEncrypt(bytes, userdata.Argon_pass)
+	ciphertext = AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
 	userlib.DatastoreSet(s, ciphertext)
 
 	// place on the data store
@@ -564,6 +568,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	// get address of the corresponding File struct
 	addresskey := userdata.Filemap[filename] // get string of the address
 	Ksym := userdata.Filekey[filename]       // get Symmetric Key for decryption
+	fileIV := userdata.FileIV[filename]
 	// Ksym := ([]byte(KsymString))
 	bytes, valid := userlib.DatastoreGet(addresskey)
 	// userlib.DebugMsg("Found bytes from store : %x", bytes)
@@ -573,7 +578,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		err = errors.New("Data store corrupted")
 		return nil, err
 	}
-	metaciphertext := AESDecrypt(metabytes, Ksym)
+	metaciphertext := AESDecrypt(metabytes, Ksym, fileIV)
 	var metadata Meta
 	_ = json.Unmarshal(metaciphertext, &metadata)
 
@@ -601,7 +606,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 		err = errors.New("Data store corrupted")
 		return nil, err
 	}
-	ciphertext := AESDecrypt(bytes, Ksym)
+	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
 
 	var file File
 	_ = json.Unmarshal(ciphertext, &file) // for the time being do not get error from unmarshal
@@ -639,7 +644,7 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 			err = errors.New("Data store corrupted")
 			return nil, err
 		}
-		ciphertext := AESDecrypt(databytes, aeskey)
+		ciphertext := AESDecrypt(databytes, aeskey, aeskey)
 
 		var filedata File_data
 		err = json.Unmarshal(ciphertext, &filedata)
@@ -675,6 +680,7 @@ type sharingRecord struct {
 	Symmetric_key []byte // Symmetric Key of file
 	Userhmackey   []byte // send the key to the other user as well to sign the content
 	Metadatakey   string // get the file sign as well to check if he recieved the correct file
+	FileIV        []byte // File IV
 	RSA_Sign      []byte // RSA_Sign to verify integrity of this message
 }
 
@@ -699,6 +705,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	record.Symmetric_key = userdata.Filekey[filename]
 	record.Userhmackey = userdata.Userhmackeys[filename] // can check here for integrity as well if needed
 	record.Metadatakey = userdata.Metamap[filename]
+	record.FileIV = userdata.FileIV[filename]
 	// record.Filesign = userdata.Filesign[filename]
 
 	_, err2 := userlib.DatastoreGet(record.Addresskey)
@@ -739,6 +746,7 @@ func recordToMsg(record sharingRecord) []byte {
 	recordreq.Symmetric_key = record.Symmetric_key
 	recordreq.Userhmackey = record.Userhmackey
 	recordreq.Metadatakey = record.Metadatakey
+	recordreq.FileIV = record.FileIV
 	bytes, _ := json.Marshal(recordreq)
 	return bytes
 }
@@ -792,13 +800,14 @@ func (userdata *User) ReceiveFile(filename string, sender string,
 	userdata.Userhmackeys[filename] = record.Userhmackey
 	// userdata.Filesign[filename] = record.Filesign
 	userdata.Metamap[filename] = record.Metadatakey
+	userdata.FileIV[filename] = record.FileIV
 
 	// remodify the userdata hash ===== importtant
 
 	userdata.SHA = toUserHash(*userdata)
 	s := toSHAString(userdata.Username)
 	bytes, _ := json.Marshal(userdata)
-	ciphertext := AESEncrypt(bytes, userdata.Argon_pass)
+	ciphertext := AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
 	userlib.DatastoreSet(s, ciphertext)
 
 	// var receiverFile *File
@@ -830,6 +839,7 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	Ksymnew := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
 	userdata.Filekey[filename] = Ksymnew
 	file_addr := userdata.Filemap[filename]
+	fileIV := userdata.FileIV[filename]
 	bytes, valid := userlib.DatastoreGet(file_addr)
 	if !valid {
 		err := errors.New("[ShareFile] DataStore corrupted2")
@@ -841,7 +851,7 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 		err = errors.New("Data store corrupted")
 		return err
 	}
-	ciphertext := AESDecrypt(bytes, Ksym)
+	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
 	var file File
 	err = json.Unmarshal(ciphertext, &file)
 	if err != nil {
@@ -858,7 +868,7 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	// file.SHA = toFileHash(file)
 
 	filebytes, _ := json.Marshal(file)
-	fileciphertext := AESEncrypt(filebytes, Ksymnew)
+	fileciphertext := AESEncrypt(filebytes, Ksymnew, fileIV)
 	userlib.DatastoreSet(file_addr, fileciphertext)
 
 	mac := userlib.NewHMAC(userdata.Userhmackeys[filename])
@@ -869,7 +879,7 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	metadata.Filesign = maca
 
 	metabytes, _ := json.Marshal(metadata)
-	metaciphertext := AESEncrypt(metabytes, Ksymnew)
+	metaciphertext := AESEncrypt(metabytes, Ksymnew, fileIV)
 	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
 
 	// remodify the userdata hash ===== importtant
@@ -880,7 +890,7 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	s := toSHAString(userdata.Username)
 
 	userbytes, _ := json.Marshal(*userdata)
-	userciphertext := AESEncrypt(userbytes, userdata.Argon_pass)
+	userciphertext := AESEncrypt(userbytes, userdata.Argon_pass, userdata.Argon_pass)
 	userlib.DatastoreSet(s, userciphertext)
 
 	return
