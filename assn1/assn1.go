@@ -107,6 +107,37 @@ type Meta struct {
 	Filesign []byte // store the H(k,E(m))
 }
 
+//////////// DEBUG
+func GetMapContent(key string) ([]byte, bool) {
+	content, status := userlib.DatastoreGet(key)
+	if !status {
+		return []byte("Content not found"), status
+	}
+	return content, true
+}
+
+func SetMapContent(key string, value []byte) {
+	userlib.DatastoreSet(key, value)
+}
+
+///////////// DEBUG
+
+func GetUserKey(username string, password string) string {
+	// Generate the key corresponding to provided user credentials
+	userKey := toSHAString(username)
+
+	return userKey
+}
+
+func (user *User) GetInodeKey(filename string) string {
+	// Generate the key corresponding to provided filename
+	if user.Filemap[filename] == "" {
+		userlib.DebugMsg("File not found")
+	}
+	fileKey := user.Filemap[filename]
+	return fileKey
+}
+
 func toFileHash(filedata File) string {
 	var filereq File
 	filereq.Symmetric_key = filedata.Symmetric_key
@@ -235,6 +266,10 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	// Decrypt using Argon2 of Password as key
 	argon_pass := toArgon2Hash(password, username)
+	if len(bytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return nil, err
+	}
 	ciphertext := AESDecrypt(bytes, argon_pass)
 
 	// Unmarshal into User structure
@@ -395,7 +430,10 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	// }
 
 	// Decrypt using Ksym as key
-
+	if len(bytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return err
+	}
 	ciphertext := AESDecrypt(bytes, Ksym)
 	var file File
 	err = json.Unmarshal(ciphertext, &file)
@@ -483,6 +521,10 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	// userlib.DebugMsg("Found bytes from store : %x", bytes)
 
 	metabytes, valid := userlib.DatastoreGet(userdata.Metamap[filename])
+	if len(metabytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return nil, err
+	}
 	metaciphertext := AESDecrypt(metabytes, Ksym)
 	var metadata Meta
 	_ = json.Unmarshal(metaciphertext, &metadata)
@@ -507,6 +549,10 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	// userlib.DebugMsg("Sym key in load: %v", Ksym)
 
 	// Decrypt using Ksym as key
+	if len(bytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return nil, err
+	}
 	ciphertext := AESDecrypt(bytes, Ksym)
 
 	var file File
@@ -541,6 +587,10 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 
 		// Decrypt using Ksym as key
 		aeskey := file.Symmetric_key
+		if len(databytes) < aesBlockSize {
+			err = errors.New("Data store corrupted")
+			return nil, err
+		}
 		ciphertext := AESDecrypt(databytes, aeskey)
 
 		var filedata File_data
@@ -605,7 +655,7 @@ func (userdata *User) ShareFile(filename string, recipient string) (
 	_, err2 := userlib.DatastoreGet(record.Addresskey)
 	if !err2 {
 		err := errors.New("[ShareFile] DataStore corrupted")
-		return "Hello", err
+		return "", err
 	}
 
 	// Sign the message (addresskey + symmetric_key)
@@ -735,7 +785,10 @@ func (userdata *User) RevokeFile(filename string) (err error) {
 	}
 
 	// Decrypt using Ksym as key
-
+	if len(bytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return err
+	}
 	ciphertext := AESDecrypt(bytes, Ksym)
 	var file File
 	err = json.Unmarshal(ciphertext, &file)

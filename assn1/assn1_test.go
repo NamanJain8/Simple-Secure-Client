@@ -291,35 +291,35 @@ func TestShare(t *testing.T) {
 
 }
 
-// func TestUserCorrupt(t *testing.T) {
-// 	// InitUser
-// 	user1, err := InitUser("aniket", "password1")
-// 	if err != nil {
-// 		t.Error(err.Error())
-// 	}
+func TestUserCorrupt(t *testing.T) {
+	// InitUser
+	user1, err := InitUser("aniket", "password1")
+	if err != nil {
+		t.Error(err.Error())
+	}
 
-// 	user2, err := InitUser("ashish", "password2")
-// 	if err != nil {
-// 		t.Error(err.Error())
-// 	}
+	user2, err := InitUser("ashish", "password2")
+	if err != nil {
+		t.Error(err.Error())
+	}
 
-// 	t.Log(user1, user2)
+	t.Log(user1, user2)
 
-// 	// GetUser (Try to ruin user data)
-// 	aniketKey := GetUserKey("aniket", "password1")
-// 	aniketCnt, _ := GetMapContent(aniketKey)
-// 	// fmt.Println(aniketCnt)
-// 	aniketCnt[len(aniketCnt)/2] = []byte("k")[0]
-// 	SetMapContent(aniketKey, aniketCnt)
+	// GetUser (Try to ruin user data)
+	aniketKey := GetUserKey("aniket", "password1")
+	aniketCnt, _ := GetMapContent(aniketKey)
+	// fmt.Println(aniketCnt)
+	aniketCnt[len(aniketCnt)/2] = []byte("k")[0]
+	SetMapContent(aniketKey, aniketCnt)
 
-// 	// Here, we intentionally want the unmarshalling to fail
-// 	user1, err = GetUser("aniket", "password1")
-// 	if err != nil {
-// 		t.Log(err.Error())
-// 	} else {
-// 		t.Error(user1)
-// 	}
-// }
+	// Here, we intentionally want the unmarshalling to fail
+	user1, err = GetUser("aniket", "password1")
+	if err != nil {
+		t.Log(err.Error())
+	} else {
+		t.Error(user1)
+	}
+}
 
 func TestStoreFile(t *testing.T) {
 	u, err := GetUser("alice", "fubar")
