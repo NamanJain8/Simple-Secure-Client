@@ -8,8 +8,6 @@ import (
 	// You neet to add with
 	// go get github.com/fenilfadadu/CS628-assn1/userlib
 
-	"time"
-
 	"github.com/fenilfadadu/CS628-assn1/userlib"
 
 	// Life is much easier with json:  You are
@@ -192,6 +190,7 @@ func toArgon2Hash(password string, salt string) []byte {
 }
 
 func ReloadUser(userdata User) *User {
+
 	mys := toSHAString(userdata.Username)
 	mybytes, valid := userlib.DatastoreGet(mys)
 
@@ -208,17 +207,15 @@ func ReloadUser(userdata User) *User {
 	myciphertext := AESDecrypt(mybytes, userdata.Argon_pass, userdata.Argon_pass)
 
 	// Unmarshal into User structure
+	// start := time.Now()
+
 	var myuserdata User
 	err := json.Unmarshal(myciphertext, &myuserdata)
+
+	// end := time.Now()
+	// userlib.DebugMsg("Reload time: %d", (end.Sub(start)).Nanoseconds())
 	if err != nil {
 		userlib.DebugMsg("[get user] error in unmarshal ", err)
-		return nil
-	}
-
-	// Compare hash and throw error if not matched
-	mynewhash := toUserHash(myuserdata)
-	if userlib.Equal([]byte(mynewhash), []byte(myuserdata.SHA)) != true {
-		// err := errors.New("[GetUser] Userdata tampered")
 		return nil
 	}
 
@@ -372,7 +369,7 @@ func storeFiledata(data []byte, aeskey []byte, addressKey string, iv []byte, HMA
 func (userdata *User) StoreFile(filename string, data []byte) {
 	// userdata, _ = GetUser(userdata.Username, userdata.Password)
 	// Reload user
-	userdata = ReloadUser(*userdata)
+	*userdata = *ReloadUser(*userdata)
 	if userdata == nil {
 		// err2 := errors.New("aPPEND ERROR")
 		return
@@ -462,14 +459,15 @@ func (userdata *User) StoreFile(filename string, data []byte) {
 // metadata you need.
 
 func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	start := time.Now()
+	// start := time.Now()
 	// Reload user
+
+	// start := time.Now()
 	userdata = ReloadUser(*userdata)
 	if userdata == nil {
 		err2 := errors.New("aPPEND ERROR")
 		return err2
 	}
-
 	// ================================================================
 
 	// load file struct and check integrity
@@ -477,6 +475,8 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	Ksym := userdata.Filekey[filename]
 	fileIV := userdata.FileIV[filename]
 	bytes, valid := userlib.DatastoreGet(addressKey)
+
+	// userlib.DebugMsg("Hello")
 	if !valid {
 		err := errors.New("[LoadFile] DataStore corrupted or File not found")
 		return err
@@ -505,7 +505,11 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 
 	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
 	var file File
+
+	// then := time.Now()
 	err = json.Unmarshal(ciphertext, &file)
+	// now := time.Now()
+	// userlib.DebugMsg("Time taken unarshal: %d", (now.Sub(then)).Nanoseconds())
 	if err != nil {
 		userlib.DebugMsg("[append file] error in unmarshal ", err)
 		return err
@@ -515,7 +519,12 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	var last File_data
 	lastcipher, _ := userlib.DatastoreGet(file.Last)
 	lastbytes := AESDecrypt(lastcipher, file.Symmetric_key, file.LastIV)
+
+	// then = time.Now()
 	_ = json.Unmarshal(lastbytes, &last)
+
+	// now = time.Now()
+	// userlib.DebugMsg("Time taken unarshal: %d", (now.Sub(then)).Nanoseconds())
 
 	// Check integrity of file struct
 	mac = userlib.NewHMAC(file.LastHMACKey)
@@ -557,26 +566,25 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 	fileciphertext := AESEncrypt(filebytes, Ksym, fileIV)
 
 	var metadata2 Meta
-	start = time.Now()
 	// now update the Hmac sign in the meta struct
 	mac = userlib.NewHMAC(Ksym)
 	mac.Write(fileciphertext)
 	maca = mac.Sum(nil)
 	metadata2.Filesign = maca
 
-	end := time.Now()
-	userlib.DebugMsg("Time taken inner: %d", (end.Sub(start)).Nanoseconds())
-
 	metabytes2, _ := json.Marshal(metadata2)
 	metaciphertext2 := AESEncrypt(metabytes2, Ksym, fileIV)
 
 	lastbytes, _ = json.Marshal(last)
-	lastcipher = AESEncrypt(lastbytes, Ksym, lastIV)
+	lastcipher = AESEncrypt(lastbytes, file.Symmetric_key, lastIV)
 
 	// place on the data store
 	userlib.DatastoreSet(addressKey, fileciphertext)
 	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext2)
 	userlib.DatastoreSet(lastAddr, lastcipher)
+
+	// end := time.Now()
+	// userlib.DebugMsg("Time taken inner: %d", (end.Sub(start)).Nanoseconds())
 	return
 }
 
@@ -585,7 +593,7 @@ func (userdata *User) AppendFile(filename string, data []byte) (err error) {
 // It should give an error if the file is corrupted in any way.
 func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	// Reload user
-	userdata = ReloadUser(*userdata)
+	*userdata = *ReloadUser(*userdata)
 	if userdata == nil {
 		return
 	}
@@ -639,16 +647,11 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	// 	userlib.DebugMsg("[load file] error in unmarshal here ", err)
 	// 	return nil, err
 	// }
-	// newhash := toFileHash(file)
-	// if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
-	// 	err := errors.New("[LoadFile] File tampered2")
-	// 	return nil, err
-	// }
 	// Now the File data has been verified to be untampered, iterate over all locations
 	element := file.First
 	dataHMACkey := file.FirstHMACKey
 	dataIV := file.FirstIV
-	userlib.DebugMsg("\n\n[Load	File] File: %v", file)
+	// userlib.DebugMsg("[Load	File] File: %v", file)
 
 	var content = ""
 	for {
@@ -662,8 +665,9 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 			err = errors.New("Data store corrupted")
 			return nil, err
 		}
+		userlib.DebugMsg("[Load] databytes:%v || key: %v || dataIV: %v:", databytes, file.Symmetric_key, dataIV)
 		ciphertext := AESDecrypt(databytes, file.Symmetric_key, dataIV)
-
+		userlib.DebugMsg("[load file current block] %v", ciphertext)
 		var filedata File_data
 		err = json.Unmarshal(ciphertext, &filedata)
 		if err != nil {
@@ -700,236 +704,213 @@ func (userdata *User) LoadFile(filename string) (data []byte, err error) {
 	return data, err
 }
 
-// // You may want to define what you actually want to pass as a
-// // sharingRecord to serialized/deserialize in the data store.
-// type sharingRecord struct {
-// 	Addresskey    string // Key of file in datastore
-// 	Symmetric_key []byte // Symmetric Key of file
-// 	Userhmackey   []byte // send the key to the other user as well to sign the content
-// 	Metadatakey   string // get the file sign as well to check if he recieved the correct file
-// 	FileIV        []byte // File IV
-// 	RSA_Sign      []byte // RSA_Sign to verify integrity of this message
-// }
+// You may want to define what you actually want to pass as a
+// sharingRecord to serialized/deserialize in the data store.
+type sharingRecord struct {
+	Addresskey    string // Key of file in datastore
+	Symmetric_key []byte // Symmetric Key of file
+	Metadatakey   string // get the file sign as well to check if he recieved the correct file
+	FileIV        []byte // File IV
+	RSA_Sign      []byte // RSA_Sign to verify integrity of this message
+}
 
-// // This creates a sharing record, which is a key pointing to something
-// // in the datastore to share with the recipient.
+// This creates a sharing record, which is a key pointing to something
+// in the datastore to share with the recipient.
 
-// // This enables the recipient to access the encrypted file as well
-// // for reading/appending.
+// This enables the recipient to access the encrypted file as well
+// for reading/appending.
 
-// // Note that neither the recipient NOR the datastore should gain any
-// // information about what the sender calls the file.  Only the
-// // recipient can access the sharing record, and only the recipient
-// // should be able to know the sender.
+// Note that neither the recipient NOR the datastore should gain any
+// information about what the sender calls the file.  Only the
+// recipient can access the sharing record, and only the recipient
+// should be able to know the sender.
 
-// func (userdata *User) ShareFile(filename string, recipient string) (
-// 	msgid string, err error) {
-// 	// userdata, _ = GetUser(userdata.Username, userdata.Password)
-// 	// Reload user
-// 	userdata = ReloadUser(*userdata)
-// 	if userdata == nil {
-// 		// err2 := errors.New("aPPEND ERROR")
-// 		return
-// 	}
+func (userdata *User) ShareFile(filename string, recipient string) (
+	msgid string, err error) {
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	*userdata = *ReloadUser(*userdata)
+	if userdata == nil {
+		return
+	}
 
-// 	var record sharingRecord
-// 	// Fill up record
-// 	record.Addresskey = userdata.Filemap[filename]
-// 	record.Symmetric_key = userdata.Filekey[filename]
-// 	record.Userhmackey = userdata.Userhmackeys[filename] // can check here for integrity as well if needed
-// 	record.Metadatakey = userdata.Metamap[filename]
-// 	record.FileIV = userdata.FileIV[filename]
-// 	// record.Filesign = userdata.Filesign[filename]
+	var record sharingRecord
+	// Fill up record
+	record.Addresskey = userdata.Filemap[filename]
+	record.Symmetric_key = userdata.Filekey[filename]
+	record.Metadatakey = userdata.Metamap[filename]
+	record.FileIV = userdata.FileIV[filename]
 
-// 	_, err2 := userlib.DatastoreGet(record.Addresskey)
-// 	if !err2 {
-// 		err := errors.New("[ShareFile] DataStore corrupted")
-// 		return "", err
-// 	}
+	_, err2 := userlib.DatastoreGet(record.Addresskey)
+	if !err2 {
+		err := errors.New("[ShareFile] DataStore corrupted")
+		return "", err
+	}
 
-// 	// Sign the message (addresskey + symmetric_key)
-// 	// First convert to bytes and then RSAsign
-// 	msg, _ := json.Marshal(record)
-// 	sign, _ := userlib.RSASign(&(userdata.RSAkey), msg)
-// 	record.RSA_Sign = sign
+	// Sign the message (addresskey + symmetric_key)
+	// First convert to bytes and then RSAsign
+	msg, _ := json.Marshal(record)
+	sign, _ := userlib.RSASign(&(userdata.RSAkey), msg)
+	record.RSA_Sign = sign
 
-// 	pub, _ := userlib.KeystoreGet(recipient) // change this to original
-// 	// pub, _ := userlib.KeystoreGet(userdata.Username)
+	pub, _ := userlib.KeystoreGet(recipient) // change this to original
+	// pub, _ := userlib.KeystoreGet(userdata.Username)
 
-// 	signed_msg, _ := json.Marshal(record)
-// 	// Encrypt the message
-// 	encryptedmessage := make([]byte, 0)
-// 	for i := 0; i < len(signed_msg); i += 128 {
-// 		prev := i
-// 		last := (i + 128)
-// 		if last > len(signed_msg) {
-// 			last = len(signed_msg)
-// 		}
-// 		message, _ := userlib.RSAEncrypt(&pub, signed_msg[prev:last], []byte(nil))
-// 		encryptedmessage = append(encryptedmessage, message...)
-// 	}
+	signed_msg, _ := json.Marshal(record)
+	// Encrypt the message
+	encryptedmessage := make([]byte, 0)
+	for i := 0; i < len(signed_msg); i += 128 {
+		prev := i
+		last := (i + 128)
+		if last > len(signed_msg) {
+			last = len(signed_msg)
+		}
+		message, _ := userlib.RSAEncrypt(&pub, signed_msg[prev:last], []byte(nil))
+		encryptedmessage = append(encryptedmessage, message...)
+	}
 
-// 	msgid = string(encryptedmessage)
-// 	return
-// }
+	msgid = string(encryptedmessage)
+	return
+}
 
-// func recordToMsg(record sharingRecord) []byte {
-// 	var recordreq sharingRecord
-// 	recordreq.Addresskey = record.Addresskey
-// 	recordreq.Symmetric_key = record.Symmetric_key
-// 	recordreq.Userhmackey = record.Userhmackey
-// 	recordreq.Metadatakey = record.Metadatakey
-// 	recordreq.FileIV = record.FileIV
-// 	bytes, _ := json.Marshal(recordreq)
-// 	return bytes
-// }
+func recordToMsg(record sharingRecord) []byte {
+	var recordreq sharingRecord
+	recordreq.Addresskey = record.Addresskey
+	recordreq.Symmetric_key = record.Symmetric_key
+	recordreq.Metadatakey = record.Metadatakey
+	recordreq.FileIV = record.FileIV
+	bytes, _ := json.Marshal(recordreq)
+	return bytes
+}
 
-// // Note recipient's filename can be different from the sender's filename.
-// // The recipient should not be able to discover the sender's view on
-// // what the filename even is!  However, the recipient must ensure that
-// // it is authentically from the sender.
-// func (userdata *User) ReceiveFile(filename string, sender string,
-// 	msgid string) error {
-// 	// userdata, _ = GetUser(userdata.Username, userdata.Password)
-// 	// Reload user
-// 	userdata = ReloadUser(*userdata)
-// 	if userdata == nil {
-// 		err2 := errors.New("aPPEND ERROR")
-// 		return err2
-// 	}
-// 	// Decrypt the message
-// 	encryptedmessage := []byte(msgid)
-// 	decryptedmessage := make([]byte, 0)
+// Note recipient's filename can be different from the sender's filename.
+// The recipient should not be able to discover the sender's view on
+// what the filename even is!  However, the recipient must ensure that
+// it is authentically from the sender.
+func (userdata *User) ReceiveFile(filename string, sender string,
+	msgid string) error {
+	// userdata, _ = GetUser(userdata.Username, userdata.Password)
+	// Reload user
+	*userdata = *ReloadUser(*userdata)
+	if userdata == nil {
+		err2 := errors.New("aPPEND ERROR")
+		return err2
+	}
+	// Decrypt the message
+	encryptedmessage := []byte(msgid)
+	decryptedmessage := make([]byte, 0)
 
-// 	for i := 0; i < len(encryptedmessage); i += 256 {
-// 		prev := i
-// 		last := (i + 256)
-// 		if last > len(encryptedmessage) {
-// 			last = len(encryptedmessage)
-// 		}
-// 		decryptedbytes, err3 := userlib.RSADecrypt(&(userdata.RSAkey), []byte(encryptedmessage[prev:last]), []byte(nil))
-// 		if err3 != nil {
-// 			userlib.DebugMsg("wow : %s", err3)
-// 		}
-// 		decryptedmessage = append(decryptedmessage, decryptedbytes...)
-// 	}
-// 	var record sharingRecord
-// 	err := json.Unmarshal(decryptedmessage, &record)
-// 	if err != nil {
-// 		userlib.DebugMsg("[recieve file] error in unmarshal ", err)
-// 		return err
-// 	}
+	for i := 0; i < len(encryptedmessage); i += 256 {
+		prev := i
+		last := (i + 256)
+		if last > len(encryptedmessage) {
+			last = len(encryptedmessage)
+		}
+		decryptedbytes, err3 := userlib.RSADecrypt(&(userdata.RSAkey), []byte(encryptedmessage[prev:last]), []byte(nil))
+		if err3 != nil {
+			userlib.DebugMsg("wow : %s", err3)
+		}
+		decryptedmessage = append(decryptedmessage, decryptedbytes...)
+	}
+	var record sharingRecord
+	err := json.Unmarshal(decryptedmessage, &record)
+	if err != nil {
+		userlib.DebugMsg("[recieve file] error in unmarshal ", err)
+		return err
+	}
 
-// 	// Check RSA Sign
-// 	sign := record.RSA_Sign
-// 	msg := recordToMsg(record)
-// 	pub, _ := userlib.KeystoreGet(sender)
-// 	err = userlib.RSAVerify(&pub, msg, sign)
+	// Check RSA Sign
+	sign := record.RSA_Sign
+	msg := recordToMsg(record)
+	pub, _ := userlib.KeystoreGet(sender)
+	err = userlib.RSAVerify(&pub, msg, sign)
 
-// 	if err != nil {
-// 		err := errors.New("[ReceiveFile] Message tampered")
-// 		return err
-// 	}
-// 	// Integrity preserved if control reaches here
-// 	// Now we need to set map in user struct
-// 	userdata.Filemap[filename] = record.Addresskey
-// 	Ksym := record.Symmetric_key
-// 	userdata.Filekey[filename] = Ksym
-// 	userdata.Userhmackeys[filename] = record.Userhmackey
-// 	// userdata.Filesign[filename] = record.Filesign
-// 	userdata.Metamap[filename] = record.Metadatakey
-// 	userdata.FileIV[filename] = record.FileIV
+	if err != nil {
+		err := errors.New("[ReceiveFile] Message tampered")
+		return err
+	}
+	// Integrity preserved if control reaches here
+	// Now we need to set map in user struct
+	userdata.Filemap[filename] = record.Addresskey
+	Ksym := record.Symmetric_key
+	userdata.Filekey[filename] = Ksym
+	// userdata.Filesign[filename] = record.Filesign
+	userdata.Metamap[filename] = record.Metadatakey
+	userdata.FileIV[filename] = record.FileIV
 
-// 	// remodify the userdata hash ===== importtant
+	// remodify the userdata hash ===== importtant
 
-// 	userdata.SHA = toUserHash(*userdata)
-// 	s := toSHAString(userdata.Username)
-// 	bytes, _ := json.Marshal(userdata)
-// 	ciphertext := AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
-// 	userlib.DatastoreSet(s, ciphertext)
+	userdata.SHA = toUserHash(*userdata)
+	s := toSHAString(userdata.Username)
+	bytes, _ := json.Marshal(userdata)
+	ciphertext := AESEncrypt(bytes, userdata.Argon_pass, userdata.Argon_pass)
+	userlib.DatastoreSet(s, ciphertext)
 
-// 	// var receiverFile *File
+	// var receiverFile *File
 
-// 	_, ok := userlib.DatastoreGet(record.Addresskey)
-// 	if !ok {
-// 		err := errors.New("[ReceiveFile] Datastore corrupted or file not found")
-// 		return err
-// 	}
+	_, ok := userlib.DatastoreGet(record.Addresskey)
+	if !ok {
+		err := errors.New("[ReceiveFile] Datastore corrupted or file not found")
+		return err
+	}
 
-// 	return nil
-// }
+	return nil
+}
 
-// // Removes access for all others.
-// func (userdata *User) RevokeFile(filename string) (err error) {
-// 	userdata, _ = GetUser(userdata.Username, userdata.Password)
+// Removes access for all others.
+func (userdata *User) RevokeFile(filename string) (err error) {
+	*userdata = *ReloadUser(*userdata)
 
-// 	// check if the file actually belongs to the user
+	// Generate new symmetric key and get file
+	Ksym := userdata.Filekey[filename]
+	Ksymnew := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
+	userdata.Filekey[filename] = Ksymnew
+	file_addr := userdata.Filemap[filename]
+	fileIV := userdata.FileIV[filename]
+	bytes, valid := userlib.DatastoreGet(file_addr)
+	if !valid {
+		err := errors.New("[ShareFile] DataStore corrupted2")
+		return err
+	}
 
-// 	// var effective_filename = userdata.Username + "_" + filename
-// 	// addresskey := toSHAString(effective_filename)
-// 	// if userlib.Equal([]byte(addresskey), []byte(userdata.Filemap[filename])) != true {
-// 	// 	err := errors.New("cant be revoked")
-// 	// 	return err
-// 	// }
+	// Decrypt using Ksym as key
+	if len(bytes) < aesBlockSize {
+		err = errors.New("Data store corrupted")
+		return err
+	}
+	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
+	var file File
+	err = json.Unmarshal(ciphertext, &file)
+	if err != nil {
+		userlib.DebugMsg("[revoke file] error in unmarshal ", err)
+		return err
+	}
 
-// 	// Generate new symmetric key and get file
-// 	Ksym := userdata.Filekey[filename]
-// 	Ksymnew := userlib.RandomBytes(aesBlockSize) //bytes of AES key for the File struct
-// 	userdata.Filekey[filename] = Ksymnew
-// 	file_addr := userdata.Filemap[filename]
-// 	fileIV := userdata.FileIV[filename]
-// 	bytes, valid := userlib.DatastoreGet(file_addr)
-// 	if !valid {
-// 		err := errors.New("[ShareFile] DataStore corrupted2")
-// 		return err
-// 	}
+	filebytes, _ := json.Marshal(file)
+	fileciphertext := AESEncrypt(filebytes, Ksymnew, fileIV)
+	userlib.DatastoreSet(file_addr, fileciphertext)
 
-// 	// Decrypt using Ksym as key
-// 	if len(bytes) < aesBlockSize {
-// 		err = errors.New("Data store corrupted")
-// 		return err
-// 	}
-// 	ciphertext := AESDecrypt(bytes, Ksym, fileIV)
-// 	var file File
-// 	err = json.Unmarshal(ciphertext, &file)
-// 	if err != nil {
-// 		userlib.DebugMsg("[revoke file] error in unmarshal ", err)
-// 		return err
-// 	}
-// 	// newhash := toFileHash(file)
-// 	// if userlib.Equal([]byte(newhash), []byte(file.SHA)) != true {
-// 	// 	err := errors.New("[RevokeFile] File tampered")
-// 	// 	return err
-// 	// }
+	mac := userlib.NewHMAC(Ksymnew)
+	mac.Write(fileciphertext)
+	maca := mac.Sum(nil)
 
-// 	// Change symmetic key to new symmetric key
-// 	// file.SHA = toFileHash(file)
+	var metadata Meta
+	metadata.Filesign = maca
 
-// 	filebytes, _ := json.Marshal(file)
-// 	fileciphertext := AESEncrypt(filebytes, Ksymnew, fileIV)
-// 	userlib.DatastoreSet(file_addr, fileciphertext)
+	metabytes, _ := json.Marshal(metadata)
+	metaciphertext := AESEncrypt(metabytes, Ksymnew, fileIV)
+	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
 
-// 	mac := userlib.NewHMAC(userdata.Userhmackeys[filename])
-// 	mac.Write(fileciphertext)
-// 	maca := mac.Sum(nil)
+	// remodify the userdata hash ===== importtant
+	userdata.SHA = toUserHash(*userdata)
 
-// 	var metadata Meta
-// 	metadata.Filesign = maca
+	// re-enter the user struct in data store because has has been changed
 
-// 	metabytes, _ := json.Marshal(metadata)
-// 	metaciphertext := AESEncrypt(metabytes, Ksymnew, fileIV)
-// 	userlib.DatastoreSet(userdata.Metamap[filename], metaciphertext)
+	s := toSHAString(userdata.Username)
 
-// 	// remodify the userdata hash ===== importtant
-// 	userdata.SHA = toUserHash(*userdata)
+	userbytes, _ := json.Marshal(*userdata)
+	userciphertext := AESEncrypt(userbytes, userdata.Argon_pass, userdata.Argon_pass)
+	userlib.DatastoreSet(s, userciphertext)
 
-// 	// re-enter the user struct in data store because has has been changed
-
-// 	s := toSHAString(userdata.Username)
-
-// 	userbytes, _ := json.Marshal(*userdata)
-// 	userciphertext := AESEncrypt(userbytes, userdata.Argon_pass, userdata.Argon_pass)
-// 	userlib.DatastoreSet(s, userciphertext)
-
-// 	return
-// }
+	return
+}

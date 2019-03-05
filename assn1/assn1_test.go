@@ -992,37 +992,77 @@ import (
 
 // // }
 
-func TestMultiUser(t *testing.T) {
+// func TestMultiUser(t *testing.T) {
+// 	userlib.KeystoreClear()
+// 	userlib.DatastoreClear()
+// 	_, _ = InitUser("alice", "fubar")
+// 	_, _ = InitUser("bob", "foobar")
+// 	// t.Log("user: ", u)
+// 	u1, _ := GetUser("alice", "fubar")
+// 	u2, _ := GetUser("alice", "fubar")
+// 	u3, _ := GetUser("bob", "foobar")
+// 	text := []byte("hello world")
+// 	u1.StoreFile("myfile", text)
+// 	// u2, _ = GetUser("alice", "fubar")
+// 	v, err := u2.LoadFile("myfile")
+// 	if err != nil {
+// 		t.Log(err)
+// 	}
+// 	t.Log("Contents:", string(v))
+// 	sharing, _ := u1.ShareFile("myfile", "bob")
+// 	u3.ReceiveFile("mynew", "alice", sharing)
+// 	v, err = u3.LoadFile("mynew")
+// 	if err != nil {
+// 		t.Log(err)
+// 	}
+// 	t.Log("Contents:", string(v))
+
+// 	userlib.DebugPrint = true
+// 	for i := 0; i < 1; i++ {
+// 		// now := time.Now()
+// 		err = u2.AppendFile("myfile", []byte("Helloo again"))
+// 		if err != nil {
+// 			t.Log("Append error")
+// 		}
+// 		// end := time.Now()
+// 		// t.Log("Time taken for append:", (end.Sub(now)).Nanoseconds())
+// 	}
+
+// 	userlib.DebugPrint = false
+// 	u2.AppendFile("myfile", []byte("Appended"))
+
+// 	v, err = u2.LoadFile("myfile")
+// 	if err != nil {
+// 		t.Log(err)
+// 	}
+// 	// t.Log("U1:", u1)
+// 	// t.Log("U2:", u2)
+
+// 	// t.Log("Contents:", string(v))
+// }
+
+func TestAppend(t *testing.T) {
+
 	userlib.KeystoreClear()
 	userlib.DatastoreClear()
-	userlib.DebugPrint = true
 	_, _ = InitUser("alice", "fubar")
-	// t.Log("user: ", u)
 	u1, _ := GetUser("alice", "fubar")
-	u2, _ := GetUser("alice", "fubar")
 	text := []byte("hello world")
 	u1.StoreFile("myfile", text)
-	// u2, _ = GetUser("alice", "fubar")
-	v, err := u2.LoadFile("myfile")
-	if err != nil {
-		t.Log(err)
-	}
-	for i := 0; i < 10; i++ {
-		// now := time.Now()
-		err = u2.AppendFile("myfile", []byte("Helloo again"))
-		if err != nil {
-			t.Log("Append error")
-		}
-		// end := time.Now()
-		// t.Log("Time taken for append:", (end.Sub(now)).Nanoseconds())
-	}
-
-	v, err = u2.LoadFile("myfile")
-	if err != nil {
-		t.Log(err)
-	}
-	// t.Log("U1:", u1)
-	// t.Log("U2:", u2)
-
+	// t.Log("aftre store User:", u1)
+	v, _ := u1.LoadFile("myfile")
 	t.Log("Contents:", string(v))
+	// t.Log("aftre load User:", u1)
+	userlib.DebugPrint = true
+	for i := 0; i < 10; i++ {
+		u1.AppendFile("myfile", text)
+	}
+	userlib.DebugPrint = false
+
+	v, err := u1.LoadFile("myfile")
+	if err != nil {
+		t.Log(err)
+	}
+	t.Log("New :", string(v))
+
 }
